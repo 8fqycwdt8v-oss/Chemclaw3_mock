@@ -27,9 +27,11 @@ uvicorn app.main:app --port 8090          # HPC launcher + ELN datasource endpoi
 python -m app.mcp_tools.vendor_server      # separate process, MCP tool over HTTP, port 8091
 ```
 
-On startup, the main app seeds ~25 free-text and ~24 structured reaction fixtures as individual
-JSON files into `MOCK_ELN_EXPORT_DIR` / `MOCK_ORD_EXPORT_DIR` (default `./data/eln/exports` and
-`./data/eln/exports/ord`). **Point Chemclaw3's own `CHEMCLAW_ELN_EXPORT_DIR` /
+On startup, the main app seeds curated fixtures **plus real, cited, published datasets** as
+individual JSON files into `MOCK_ELN_EXPORT_DIR` / `MOCK_ORD_EXPORT_DIR` (default
+`./data/eln/exports` and `./data/eln/exports/ord`): ~32 free-text records and ~10,000
+structured/ORD records by default (see "Real datasets" below for the full breakdown and exact
+provenance of every one of them). **Point Chemclaw3's own `CHEMCLAW_ELN_EXPORT_DIR` /
 `CHEMCLAW_ORD_EXPORT_DIR` at those same paths** — Chemclaw3 reads ELN data as flat files off
 disk, not over HTTP (see "How the ELN datasources actually connect" below).
 
@@ -114,10 +116,66 @@ impurity profile and one explicit `outcome: failure` record with a `failure_reas
 
 ### Structured source (`eln-ord`, Open Reaction Database)
 
-~24 records in native ORD `Reaction` JSON shape: component-linked `inputs` (with
+~24 curated records in native ORD `Reaction` JSON shape: component-linked `inputs` (with
 `additionOrder`/`additionTime`), `conditions.temperature`, `outcomes[].products[].measurements`
 (YIELD/PURITY), and a `workups[]` sequence (wash + filtration) — so Chemclaw3's `OrdJsonAdapter`
 produces genuinely step-linked procedures, not prose-segmented guesses.
+
+## Real datasets (`app/eln/real_hte.py`, `app/eln/real_procedures.py`)
+
+On top of the curated fixtures above, this repo bundles **real, published, cited experimental
+data** — no synthesized chemistry, no templated procedure text. Raw factor tables are committed
+as small CSVs in `app/eln/real_data/` (pulled once from their public sources) and expanded into
+Chemclaw3's adapter shapes at seed time; no network access is needed at runtime. Every record
+carries a real `provenance.doi` (structured source) or cites its DOI directly in the `procedure`
+text (free-text source).
+
+### Structured / HTE screening (`eln-ord`)
+
+| Dataset ID | Reactions | Real reaction class | Source |
+|---|---|---|---|
+| `bh-amination-plate-p2et` | 1,320 | Buchwald-Hartwig **amination** | Ahneman, Estrada, Lin, Dreher, Doyle. *Science* 2018, 360, 186-190. DOI [10.1126/science.aar5169](https://doi.org/10.1126/science.aar5169) |
+| `bh-amination-plate-mtbd` | 1,318 | Buchwald-Hartwig **amination** | same as above |
+| `bh-amination-plate-btmg` | 1,317 | Buchwald-Hartwig **amination** | same as above |
+| `suzuki-miyaura-flow-hte` | 5,760 | Suzuki-Miyaura | Perera et al. *Science* 2018, 359, 429-434. DOI [10.1126/science.aap9112](https://doi.org/10.1126/science.aap9112) |
+| `santanilla-amidation-screen` | 96 | Buchwald-Hartwig **amidation** | Santanilla et al. *Science* 2015, 347, 49-53. DOI [10.1126/science.1259203](https://doi.org/10.1126/science.1259203), Experiment 2 |
+| `santanilla-sulfonamidation-screen` | 96 | Buchwald-Hartwig-type sulfonamidation | same as above |
+| `nielsen-deoxyfluorination-screen` | 80 | Deoxyfluorination | Nielsen et al. *JACS* 2018, 140, 5004-5008. DOI [10.1021/jacs.8b01523](https://doi.org/10.1021/jacs.8b01523) |
+
+**On "amination" vs. "amidation":** the original ask was for 3 Buchwald-Hartwig *amidation* HTE
+screens. The Ahneman/Doyle dataset above — the only public HTE benchmark of that scale for this
+Pd-catalyzed reaction family — actually couples aryl halides with **4-methylaniline** (an amine,
+not an amide), so it is Buchwald-Hartwig amination. No comparable public *amidation* HTE
+benchmark of that scale exists. It does, however, naturally split into **3 real physical
+screening plates** (one base per plate: P2Et/MTBD/BTMG), matching the "3 different HTE
+screenings" ask structurally. Separately, the real Santanilla Experiment 2 dataset's "amide S4"
+nucleophile subset (aryl bromide + benzamide, 96 real conditions) *is* genuine Buchwald-Hartwig
+amidation — a smaller but real fourth screen (`santanilla-amidation-screen`) that directly
+satisfies the original chemistry ask.
+
+The Suzuki-Miyaura dataset's second coupling partner is only identified by the source paper's
+own shorthand codes (`2a`-`2d`) — no SMILES was published for it in the source spreadsheet, so
+it's carried as a real `NAME` identifier rather than a guessed structure.
+
+Every real HTE dataset is fully real by default (`MOCK_HTE_MAX_RECORDS_PER_DATASET=0`); set it
+to a positive number to cap each dataset to its first N rows (real rows only truncated, never
+fabricated) for faster local iteration. The test suite caps it to 5 for speed — see
+`test_real_hte_datasets_at_full_scale` in `tests/test_eln.py` for a direct, uncapped check of
+the real counts above.
+
+### Free-text (`eln-json`)
+
+Bulk real USPTO-patent procedure text (the original 10,000-entry target for this source) lives
+behind hosts this environment's network policy blocks outright: figshare.com (Lowe's original
+USPTO corpus), huggingface.co (blocks the *official* Open Reaction Database mirror too),
+zenodo.org, kaggle.com, and even an IBM Box link one candidate mirror pointed to. No
+GitHub-committed (non-LFS) real corpus of that scale was found either. Rather than pad the count
+with generated or templated prose, this source stays small and 100% real:
+
+| Records | Source |
+|---|---|
+| 3 | Liu, R. Y. "Copper-Catalyzed Enantioselective Hydroamination of Alkenes." *Org. Synth.* 2018, 95, 80-96. DOI [10.15227/orgsyn.095.0080](https://doi.org/10.15227/orgsyn.095.0080). Quantities, conditions, workup, and analytical data taken directly from the real Open Reaction Database example submission for this paper. |
+| 4 | The highest-yielding real well for 4 other nucleophile classes from the same Santanilla et al. *Science* 2015 Experiment 2 screen (amination/aniline, Suzuki/boronate, Sonogashira/alkyne, etherification/alcohol), narrated using the paper's own real quoted general procedure text. |
 
 ## MCP vendor tool
 
@@ -152,4 +210,5 @@ errors.
 | `MOCK_ELN_EXPORT_DIR` | `./data/eln/exports` | Where free-text fixtures are seeded |
 | `MOCK_ORD_EXPORT_DIR` | `./data/eln/exports/ord` | Where ORD fixtures are seeded |
 | `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories when the app starts |
+| `MOCK_HTE_MAX_RECORDS_PER_DATASET` | `0` (unlimited) | Cap each real HTE dataset (`app/eln/real_hte.py`) to its first N rows; real rows only truncated, never fabricated |
 | `MOCK_MCP_VENDOR_HOST` / `MOCK_MCP_VENDOR_PORT` | `0.0.0.0` / `8091` | Bind address for the vendor MCP server |

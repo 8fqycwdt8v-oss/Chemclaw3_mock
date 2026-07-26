@@ -43,6 +43,11 @@ class Settings:
         self.ord_export_dir = Path(_env_str("MOCK_ORD_EXPORT_DIR", "./data/eln/exports/ord"))
         self.eln_seed_on_startup = _env_bool("MOCK_ELN_SEED_ON_STARTUP", True)
 
+        # Caps each real HTE dataset (app/eln/real_hte.py) to its first N rows when set to a
+        # positive number -- real data only truncated, never fabricated. 0 (default) seeds every
+        # real record. Tests override this to a small number to keep the suite fast.
+        self.hte_max_records_per_dataset = _env_int("MOCK_HTE_MAX_RECORDS_PER_DATASET", 0)
+
         # MCP vendor tool server (run standalone, see app/mcp_tools/vendor_server.py).
         self.mcp_vendor_host = _env_str("MOCK_MCP_VENDOR_HOST", "0.0.0.0")
         self.mcp_vendor_port = _env_int("MOCK_MCP_VENDOR_PORT", 8091)

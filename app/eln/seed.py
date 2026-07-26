@@ -17,6 +17,8 @@ from typing import Any
 
 from app.config import settings
 from app.eln.fixtures_data import ord_style_records, uspto_style_records
+from app.eln.real_hte import all_real_hte_records
+from app.eln.real_procedures import real_uspto_style_records
 
 _JSON_INDENT = 2
 
@@ -49,11 +51,35 @@ def seed_all(*, reset: bool = True) -> dict[str, int]:
     for record in uspto_records:
         _write_json(settings.eln_export_dir / f"{record['id']}.json", record)
 
+    real_free_text_records = real_uspto_style_records()
+    for record in real_free_text_records:
+        _write_json(settings.eln_export_dir / f"{record['id']}.json", record)
+
     ord_records = ord_style_records()
     for record in ord_records:
         _write_json(settings.ord_export_dir / f"{record['reactionId']}.json", record)
 
-    return {"eln_json": len(uspto_records), "eln_ord": len(ord_records)}
+    real_hte_by_dataset = all_real_hte_records(
+        max_per_dataset=settings.hte_max_records_per_dataset or None
+    )
+    for dataset_records in real_hte_by_dataset.values():
+        for record in dataset_records:
+            _write_json(settings.ord_export_dir / f"{record['reactionId']}.json", record)
+
+    counts = {
+        "eln_json_curated": len(uspto_records),
+        "eln_json_real": len(real_free_text_records),
+        "eln_ord_curated": len(ord_records),
+    }
+    for dataset_id, dataset_records in real_hte_by_dataset.items():
+        counts[f"eln_ord_{dataset_id}"] = len(dataset_records)
+
+    # Back-compat aggregate keys: total files actually seeded into each directory.
+    counts["eln_json"] = counts["eln_json_curated"] + counts["eln_json_real"]
+    counts["eln_ord"] = counts["eln_ord_curated"] + sum(
+        len(records) for records in real_hte_by_dataset.values()
+    )
+    return counts
 
 
 def list_entries(directory: Path) -> list[dict[str, Any]]:
