@@ -16,6 +16,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "hpc_enforce_auth", True)
     monkeypatch.setattr(settings, "hpc_polls_until_done", 2)
     monkeypatch.setattr(settings, "hpc_unknown_status_every_n_polls", 0)
+    monkeypatch.setattr(settings, "hte_max_records_per_dataset", 5)
     job_store.reset()
 
     from app.main import app
