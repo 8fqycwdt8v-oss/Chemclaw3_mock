@@ -53,8 +53,14 @@ CHEMCLAW_DATA_SOURCES=graph,eln-json,eln-ord
 CHEMCLAW_ELN_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports
 CHEMCLAW_ORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports/ord
 
-# MCP tool over HTTP transport.
-CHEMCLAW_MCP_SERVERS=[{"transport":"http","name":"mock-vendor","url":"http://localhost:8091/mcp","allowed_tools":["search_building_blocks","get_price"]}]
+# MCP tool over HTTP transport. Chemclaw3 reaches an MCP server through its *connector* seam
+# (D-118), so the setting is CHEMCLAW_CONNECTOR_URLS — a JSON map of connector name to URL.
+# The older CHEMCLAW_MCP_SERVERS list no longer exists as a field, and because Chemclaw3's
+# settings are `extra="forbid"`, exporting it aborts startup with a validation error rather
+# than being ignored.
+CHEMCLAW_CONNECTOR_URLS='{"mock-vendor":"http://localhost:8091/mcp"}'
+# `allowed_tools` is no longer set here either: it is declared in the connector's own
+# connector.yaml manifest, on the serving side.
 ```
 
 And on this repo's side, set `MOCK_ELN_EXPORT_DIR` / `MOCK_ORD_EXPORT_DIR` to the exact same
