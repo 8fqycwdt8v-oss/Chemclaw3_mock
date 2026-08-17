@@ -8,7 +8,11 @@ dependencies = [
     "uvicorn[standard]>=0.32",
     "httpx>=0.27",
     "pydantic>=2.9",
-    "mcp>=1.2",
+    # The upper bound is load-bearing: mcp 2.0 removed `mcp.server.fastmcp`, the module
+    # `app/mcp_tools/vendor_server.py` imports `FastMCP` from, with no shim. Unbounded, a
+    # fresh install resolves 2.x and mock-vendor dies at import with no code change here at
+    # all. Chemclaw3-mcp's own mcp-server-kit pins the same way for the same reason.
+    "mcp>=1.2,<2",
 ]
 
 [project.optional-dependencies]
