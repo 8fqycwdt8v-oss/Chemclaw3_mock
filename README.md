@@ -163,6 +163,16 @@ The Suzuki-Miyaura dataset's second coupling partner is only identified by the s
 own shorthand codes (`2a`-`2d`) — no SMILES was published for it in the source spreadsheet, so
 it's carried as a real `NAME` identifier rather than a guessed structure.
 
+> **Consequence worth knowing before you point Chemclaw3 at this: all 5,760 of those records are
+> refused on ingest.** `ord_adapter._smiles` resolves SMILES, InChI and known reagent *names*, and
+> `2a, Boronic Acid` is none of those — so it raises rather than inventing a structure, which is
+> the correct behaviour and is pinned by a test on that side naming this exact dataset. Measured
+> against a live stack on 2026-08-18: of the 10,011 ORD records seeded here, **4,251 map and 5,760
+> are refused**, every refusal this screen. Everything else seeds and ingests intact, including the
+> 644 records at exactly 0.00% yield and the 480 no-ligand / 720 no-base control conditions in this
+> same screen. Nothing here is broken; the number is simply not what "10,011 records seeded"
+> suggests, and downstream graders have been caught assuming otherwise.
+
 Every real HTE dataset is fully real by default (`MOCK_HTE_MAX_RECORDS_PER_DATASET=0`); set it
 to a positive number to cap each dataset to its first N rows (real rows only truncated, never
 fabricated) for faster local iteration. The test suite caps it to 5 for speed — see
@@ -182,6 +192,13 @@ with generated or templated prose, this source stays small and 100% real:
 |---|---|
 | 3 | Liu, R. Y. "Copper-Catalyzed Enantioselective Hydroamination of Alkenes." *Org. Synth.* 2018, 95, 80-96. DOI [10.15227/orgsyn.095.0080](https://doi.org/10.15227/orgsyn.095.0080). Quantities, conditions, workup, and analytical data taken directly from the real Open Reaction Database example submission for this paper. |
 | 4 | The highest-yielding real well for 4 other nucleophile classes from the same Santanilla et al. *Science* 2015 Experiment 2 screen (amination/aniline, Suzuki/boronate, Sonogashira/alkyne, etherification/alcohol), narrated using the paper's own real quoted general procedure text. |
+
+One of those four — `santanilla-orgsyn-boronate-well-Y36` — carries the paper's real
+`yield_percent = 119.43`, which is what an uncalibrated relative-UPLC readout does. **Chemclaw3
+refuses it**: `OrdReaction` bounds a yield at 100, so this is the one record of this source that
+can never ingest (`ingested=31 rejected=1`, one WARNING naming it and quoting the validation
+error). Kept as published rather than clipped to 100 — a fabricated 100% would be worse than an
+honest refusal — but worth knowing it is a record you cannot query for.
 
 ## MCP vendor tool
 
