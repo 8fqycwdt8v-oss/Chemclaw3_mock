@@ -18,6 +18,7 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 | ELN — free text | A JSON-exporting ELN, USPTO-style patent procedures (`eln-json` source) | `app/eln/fixtures_data.py` (`uspto_style_records`) |
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
+| Entra ID | A tenant: publishes signing keys, mints tokens Chemclaw3 accepts (**opt-in**) | `app/entra/` |
 
 ## Install & run
 
@@ -34,6 +35,65 @@ structured/ORD records by default (see "Real datasets" below for the full breakd
 provenance of every one of them). **Point Chemclaw3's own `CHEMCLAW_ELN_EXPORT_DIR` /
 `CHEMCLAW_ORD_EXPORT_DIR` at those same paths** — Chemclaw3 reads ELN data as flat files off
 disk, not over HTTP (see "How the ELN datasources actually connect" below).
+
+## The stand-in Entra tenant
+
+Chemclaw3's front door validates every request's bearer token against a tenant's JWKS — RS256
+signature, audience, issuer. All of that is testable without Microsoft, because a tenant, *to a
+resource server*, is a JWKS document and an issuer string. Until this existed nothing in the
+four-repo stack could run with `CHEMCLAW_ENTRA_REQUIRED=true`: the live lane pinned it false, the
+UI e2e ran `AUTH_MODE=dev`, and the enforced path every real deployment runs was covered by unit
+tests alone.
+
+**It is off by default and should stay off anywhere that matters.** The mint endpoint takes no
+client authentication and issues a token for whatever identity and roles are asked for — reachable
+from somewhere real, it forges credentials against every resource server that trusts this issuer.
+
+```bash
+MOCK_ENTRA_ENABLED=true uvicorn app.main:app --port 8090
+```
+
+Point Chemclaw3 at it:
+
+| Chemclaw3 setting | Value |
+| --- | --- |
+| `CHEMCLAW_ENTRA_REQUIRED` | `true` |
+| `CHEMCLAW_ENTRA_ISSUER` | `http://127.0.0.1:8090/entra/mock-tenant/v2.0` |
+| `CHEMCLAW_ENTRA_JWKS_URL` | `http://127.0.0.1:8090/entra/mock-tenant/discovery/v2.0/keys` |
+| `CHEMCLAW_ENTRA_AUDIENCE` | `api://chemclaw` |
+
+The issuer and the JWKS URL are both set because Chemclaw3 derives them independently — an issuer
+alone cannot resolve a keys endpoint — and its own `MOCK_ENTRA_ISSUER` / `MOCK_ENTRA_AUDIENCE` must
+match the two it is told.
+
+Then mint whatever identity the test needs:
+
+```bash
+curl -s localhost:8090/entra/mock-tenant/oauth2/v2.0/token \
+  -H 'content-type: application/json' \
+  -d '{"oid":"u-alice","upn":"alice@corp.example","roles":["process-chemist"]}' \
+  | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+```
+
+`roles` is what Chemclaw3 gates expensive jobs, write tools and the reviewer routes on, so this is
+how a lane drives an entitled chemist and an unentitled one through the same code path.
+
+### Minting tokens that should be refused
+
+Half of what a lane needs to prove about authentication is what gets turned away, so every way to
+be invalid is one field on the same request rather than a separate endpoint:
+
+| Field | Mints | Refused by |
+| --- | --- | --- |
+| `"audience": "api://someone-else"` | a token for another resource | the confused-deputy guard |
+| `"issuer": "https://attacker.test/v2.0"` | a token from another issuer | the issuer check |
+| `"expires_in": -60` | an already-expired token | the expiry check |
+| `"omit_expiry": true` | a token with no `exp` at all | `options={"require": ["exp"]}` |
+| `"unpublished_key": true` | a forgery signed by a key this JWKS never published | the signature |
+
+The last one is why `app/entra/keys.py` holds two keys and publishes one: a mock that can only mint
+valid tokens cannot ask whether forgeries are rejected. `tests/test_entra.py` asserts each of these
+is refused *for its own reason* — the class of error, not merely that one was raised.
 
 ## Wiring a Chemclaw3 checkout to this backend
 
