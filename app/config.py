@@ -48,6 +48,30 @@ class Settings:
         # real record. Tests override this to a small number to keep the suite fast.
         self.hte_max_records_per_dataset = _env_int("MOCK_HTE_MAX_RECORDS_PER_DATASET", 0)
 
+        # A stand-in Entra tenant (app/entra/): publishes signing keys and mints tokens that
+        # Chemclaw3's front door accepts, so a lane can run with CHEMCLAW_ENTRA_REQUIRED=true.
+        #
+        # **Off by default, and that default is the security control.** The mint endpoint takes no
+        # client authentication and issues a token for whatever identity and roles are asked for,
+        # so anywhere it is reachable, it is a machine for forging credentials against every
+        # resource server that trusts this issuer. Nothing else in this process is dangerous when
+        # left on; this is, so it is opt-in per run rather than per deployment.
+        self.entra_enabled = _env_bool("MOCK_ENTRA_ENABLED", False)
+        # The `iss` this tenant claims. Chemclaw3's CHEMCLAW_ENTRA_ISSUER must match it exactly,
+        # and its CHEMCLAW_ENTRA_JWKS_URL must point at this tenant's keys route — the two derive
+        # independently there, which is why both are set rather than a tenant id.
+        self.entra_issuer = _env_str(
+            "MOCK_ENTRA_ISSUER", "http://127.0.0.1:8090/entra/mock-tenant/v2.0"
+        )
+        # The `aud` minted tokens carry. Must equal Chemclaw3's CHEMCLAW_ENTRA_AUDIENCE, which is
+        # the confused-deputy guard: a token for another resource is refused even when this tenant
+        # signed it.
+        self.entra_audience = _env_str("MOCK_ENTRA_AUDIENCE", "api://chemclaw")
+        # A fixed signing key, for a lane that needs tokens to survive a restart of this process.
+        # Empty (the default) generates one per start, which is what a mock should do: a signing
+        # key committed to a repository is one that eventually signs something real.
+        self.entra_private_key_pem = _env_str("MOCK_ENTRA_PRIVATE_KEY_PEM", "")
+
         # MCP vendor tool server (run standalone, see app/mcp_tools/vendor_server.py).
         self.mcp_vendor_host = _env_str("MOCK_MCP_VENDOR_HOST", "0.0.0.0")
         self.mcp_vendor_port = _env_int("MOCK_MCP_VENDOR_PORT", 8091)

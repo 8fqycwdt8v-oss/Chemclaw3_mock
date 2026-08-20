@@ -13,6 +13,10 @@ dependencies = [
     # fresh install resolves 2.x and mock-vendor dies at import with no code change here at
     # all. Chemclaw3-mcp's own mcp-server-kit pins the same way for the same reason.
     "mcp>=1.2,<2",
+    # RS256 signing for the stand-in Entra tenant (app/entra/). `[crypto]` is what pulls in
+    # `cryptography`, without which PyJWT can encode HS256 and nothing else — and HS256 is exactly
+    # the algorithm a resource server pinned to RS256 must never accept.
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]
