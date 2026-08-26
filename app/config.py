@@ -26,16 +26,9 @@ def _env_bool(name: str, default: bool) -> bool:
 
 
 class Settings:
-    """All configuration for the mock HPC + ELN + MCP backend, read once at import time."""
+    """All configuration for the mock ELN + MCP backend, read once at import time."""
 
     def __init__(self) -> None:
-        # HPC launcher mock.
-        self.hpc_api_token = _env_str("MOCK_HPC_API_TOKEN", "mock-hpc-token")
-        self.hpc_artifact_store_token = _env_str("MOCK_HPC_ARTIFACT_STORE_TOKEN", "")
-        self.hpc_enforce_auth = _env_bool("MOCK_HPC_ENFORCE_AUTH", True)
-        self.hpc_polls_until_done = _env_int("MOCK_HPC_POLLS_UNTIL_DONE", 2)
-        self.hpc_unknown_status_every_n_polls = _env_int("MOCK_HPC_UNKNOWN_STATUS_EVERY_N", 0)
-
         # ELN seeding: directories the seed writer materializes fixture files into. These are
         # meant to be set to the SAME paths Chemclaw3 is configured with
         # (CHEMCLAW_ELN_EXPORT_DIR / CHEMCLAW_ORD_EXPORT_DIR) — see README.md.
