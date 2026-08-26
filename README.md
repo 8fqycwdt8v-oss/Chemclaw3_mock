@@ -281,6 +281,25 @@ additionally verified against Chemclaw3's real `JsonExportAdapter`/`OrdJsonAdapt
 directly (not just shape assertions here) — both parsed all seeded entries with zero mapping
 errors.
 
+## CI
+
+`Jenkinsfile` is this repository's first automated check of any kind. It installs, runs the suite,
+and then does the one thing the suite cannot: **starts both processes through their own start
+scripts** and asks each of them a question. Every test here drives the app in-process through ASGI,
+so `start.sh` and `start-mcp.sh` — including the `.venv` path they hardcode, and which the
+four-repository e2e lane actually invokes — were exercised by nothing.
+
+The backend is asked for `/healthz`. The vendor MCP server has no health route, so it is asked
+whether its transport is up at all: a bare POST to `/mcp` is not a valid MCP `initialize`, so any
+HTTP status (406, in practice) means the port is open and speaking, and only a connection failure
+is a failure.
+
+**It publishes no image and deploys nowhere, and that is the design rather than a gap.** This is a
+test double. Beside the real integrations it would give the system two answers to one question, so
+no environment above `dev` runs it and no release descriptor names it — see Chemclaw3's
+`deploy/jenkins/README.md` and `D-2026-08-26-a-release-is-a-descriptor-and-a-target`. It runs in the
+local lane, which is where a double belongs.
+
 ## Configuration reference (this backend's own env vars)
 
 | Variable | Default | Meaning |
