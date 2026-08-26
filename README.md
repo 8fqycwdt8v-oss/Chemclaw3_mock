@@ -1,20 +1,21 @@
 # Chemclaw3_mock
 
 A lightweight FastAPI mock/test backend for [Chemclaw3](https://github.com/8fqycwdt8v-oss/Chemclaw3):
-a mocked HPC/Nextflow launcher, two ELN datasources (free-text and structured/ORD), and an
+two ELN datasources (free-text and structured/ORD), a stand-in Entra tenant, and an
 example HTTP-transport MCP tool. Everything is deterministic, CPU-light, and runs with no real
-compute, no HPC cluster, no database, and no network access — meant for a plain dev/text
-environment.
+compute, no database, and no network access — meant for a plain dev/text environment.
 
-Every wire shape here was verified against Chemclaw3's actual source (`workflows/hpc/nextflow.py`,
-`eln/json_adapter.py`, `eln/ord_adapter.py`), and the two ELN fixture sets were round-tripped
+(It also carried a mocked HPC/Nextflow launcher until Chemclaw3 removed that tier entirely —
+`D-2026-08-26-semiempirical-is-the-whole-tier` there. Nothing is left to stand in for.)
+
+Every wire shape here was verified against Chemclaw3's actual source
+(`eln/json_adapter.py`, `eln/ord_adapter.py`), and the two ELN fixture sets were round-tripped
 through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 
 ## What's here
 
 | Component | What it mocks | Where |
 |---|---|---|
-| HPC launcher | Seqera-Tower-style REST API (`CHEMCLAW_HPC_LAUNCH_INTERFACE=nextflow`) | `app/hpc/` |
 | ELN — free text | A JSON-exporting ELN, USPTO-style patent procedures (`eln-json` source) | `app/eln/fixtures_data.py` (`uspto_style_records`) |
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
@@ -24,7 +25,7 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 
 ```bash
 pip install -e .
-uvicorn app.main:app --port 8090          # HPC launcher + ELN datasource endpoints
+uvicorn app.main:app --port 8090          # ELN datasource + Entra endpoints
 python -m app.mcp_tools.vendor_server      # separate process, MCP tool over HTTP, port 8091
 ```
 
@@ -100,14 +101,6 @@ is refused *for its own reason* — the class of error, not merely that one was 
 Add to Chemclaw3's `.env` (or export directly):
 
 ```bash
-# HPC launcher — real HTTP code path against this mock instead of the built-in in-process mock.
-CHEMCLAW_HPC_LAUNCH_INTERFACE=nextflow
-CHEMCLAW_HPC_API_BASE_URL=http://localhost:8090
-CHEMCLAW_HPC_API_TOKEN=mock-hpc-token          # must match MOCK_HPC_API_TOKEN below
-CHEMCLAW_HPC_ARTIFACT_STORE_URL=http://localhost:8090/artifacts
-CHEMCLAW_HPC_PIPELINE_NAME=qm-pipeline
-CHEMCLAW_HPC_PIPELINE_VERSION=mock-1
-
 # ELN datasources — file-based; point these at the SAME paths this mock seeds into.
 CHEMCLAW_DATA_SOURCES=graph,eln-json,eln-ord
 CHEMCLAW_ELN_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports
@@ -129,34 +122,8 @@ absolute paths before starting `uvicorn`, e.g.:
 ```bash
 export MOCK_ELN_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports
 export MOCK_ORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports/ord
-export MOCK_HPC_API_TOKEN=mock-hpc-token
 uvicorn app.main:app --port 8090
 ```
-
-## How the HPC mock behaves
-
-Implements exactly the three calls Chemclaw3's real launcher client makes
-(`workflows/hpc/nextflow.py`):
-
-- `POST /workflow/launch` — Bearer-auth checked, `Idempotency-Key` deduped (a retried launch
-  returns the same `workflowId` instead of double-submitting). Returns `{"workflowId": "..."}`.
-- `GET /workflow/{id}` — returns `{"workflow": {"status": "..."}}`. The run advances one state
-  per poll (`SUBMITTED`→`RUNNING`→`SUCCEEDED`), reaching a terminal state in
-  `MOCK_HPC_POLLS_UNTIL_DONE` polls (default 2) — no real wall-clock wait, so Chemclaw3's
-  heartbeat-poll loop is genuinely exercised without slowing tests down.
-- `GET /artifacts/{id}/qm_output.txt` — returns `energy=<float> converged=<bool>` text matching
-  Chemclaw3's `parse_qm_output` regex exactly. 409 until the run reaches `SUCCEEDED`.
-
-The synthetic energy is a deterministic hash of `(smiles, method, basis_set)` — same inputs
-always give the same energy, no randomness, no real QM.
-
-**Testing error paths** — no config needed, just send a `method` string containing one of these
-substrings:
-- `FORCE_FAIL` — the run terminates `FAILED` (tests Chemclaw3's non-retryable failure handling).
-- `NOCONVERGE` — the run `SUCCEEDED`s but the artifact reports `converged=False`.
-
-Auth is enforced by default (`MOCK_HPC_ENFORCE_AUTH=true`): a missing/wrong bearer token gets a
-401. Set `MOCK_HPC_ENFORCE_AUTH=false` to skip that check entirely.
 
 ## How the ELN datasources actually connect
 
@@ -275,8 +242,8 @@ pip install -e ".[dev]"
 pytest
 ```
 
-Covers the HPC launch→poll→artifact lifecycle (including auth failures, idempotency dedup, and
-both error sentinels) and the ELN list/append/reset endpoints. The ELN fixtures themselves were
+Covers the ELN list/append/reset endpoints, the stand-in Entra tenant's accept and reject paths,
+and the vendor MCP tool. The ELN fixtures themselves were
 additionally verified against Chemclaw3's real `JsonExportAdapter`/`OrdJsonAdapter` classes
 directly (not just shape assertions here) — both parsed all seeded entries with zero mapping
 errors.
@@ -304,11 +271,6 @@ local lane, which is where a double belongs.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `MOCK_HPC_API_TOKEN` | `mock-hpc-token` | Expected bearer token for `/workflow/*` |
-| `MOCK_HPC_ARTIFACT_STORE_TOKEN` | (empty) | Separate artifact-store token; falls back to the launcher token when unset |
-| `MOCK_HPC_ENFORCE_AUTH` | `true` | Set `false` to accept any/no Authorization header |
-| `MOCK_HPC_POLLS_UNTIL_DONE` | `2` | How many `GET /workflow/{id}` calls before a run reaches its terminal state |
-| `MOCK_HPC_UNKNOWN_STATUS_EVERY_N` | `0` (off) | Every Nth poll before completion returns launcher status `UNKNOWN` instead of `RUNNING` |
 | `MOCK_ELN_EXPORT_DIR` | `./data/eln/exports` | Where free-text fixtures are seeded |
 | `MOCK_ORD_EXPORT_DIR` | `./data/eln/exports/ord` | Where ORD fixtures are seeded |
 | `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories when the app starts |

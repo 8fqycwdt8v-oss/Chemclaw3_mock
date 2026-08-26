@@ -1,7 +1,7 @@
 [project]
 name = "chemclaw3-mock"
 version = "0.1.0"
-description = "Lightweight FastAPI mock backend (HPC launcher, ELN datasources, MCP tool) for testing Chemclaw3 without real infrastructure."
+description = "Lightweight FastAPI mock backend (ELN datasources, Entra tenant, MCP tool) for testing Chemclaw3 without real infrastructure."
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",

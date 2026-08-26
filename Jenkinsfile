@@ -1,13 +1,13 @@
 // The mock's pipeline: gate it, and prove both processes still start.
 //
-// **This repository has had no CI of any kind.** Four test modules — the HPC launcher, the ELN
-// sources, the stand-in Entra tenant, the vendor MCP tool — run only when somebody remembers. That
+// **This repository has had no CI of any kind.** Its test modules — the ELN sources, the stand-in
+// Entra tenant, the vendor MCP tool — run only when somebody remembers. That
 // is the gap this closes, and it is a bigger one than it looks: the four-repository e2e lane
 // (`infra/live/e2e-full-stack/up.sh` in the Chemclaw3 checkout) is what proves the *real* system
 // end to end, and it proves it against these processes. A broken mock reads as a broken backend.
 //
-// **It publishes nothing and deploys nowhere, deliberately.** This is a test double: a stand-in HPC
-// launcher, ELN source, Entra tenant and vendor MCP tool. Beside the real integrations it would give
+// **It publishes nothing and deploys nowhere, deliberately.** This is a test double: a stand-in
+// ELN source, Entra tenant and vendor MCP tool. Beside the real integrations it would give
 // the system two answers to one question, so no environment above `dev` runs it and no release
 // descriptor names it (`D-2026-08-26-a-release-is-a-descriptor-and-a-target` in Chemclaw3). Where a
 // dev environment wants it in-cluster, it needs an image and a chart first — neither exists here,
