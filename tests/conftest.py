@@ -2,6 +2,23 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
+from app.entra import faults, keys
+
+
+@pytest.fixture(autouse=True)
+def _tenant_state_per_test():
+    """Put the stand-in tenant's key set and armed fault back between tests.
+
+    Both live at module scope in `app/entra/` — a signing key set is process state, and so is a
+    fault somebody armed over HTTP — so without this a test that rotates or breaks the tenant
+    changes what every later test is running against. Around each test rather than after, so an
+    ordering the suite grows into cannot make one of them depend on the previous one's cleanup.
+    """
+    keys.reset()
+    faults.reset()
+    yield
+    keys.reset()
+    faults.reset()
 
 
 @pytest.fixture

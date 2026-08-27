@@ -162,3 +162,48 @@ def test_the_tenant_is_off_unless_a_run_asks_for_it(monkeypatch):
         minted = client.post(f"/entra/{TENANT}/oauth2/v2.0/token", json={"oid": "u-1"})
         assert minted.status_code == 404
         assert client.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 200
+
+
+def test_the_fault_control_surface_is_absent_unless_a_run_asks_for_it(tenant, monkeypatch):
+    """Two 404s and an intact key set: arming a fault is a strictly larger power than minting.
+
+    A minted token decides *who* gets in; an armed fault decides whether **anyone** does, for every
+    service that trusts this issuer — so it is its own switch rather than a second thing
+    `MOCK_ENTRA_ENABLED` turns on, and the `tenant` fixture above (which enables minting) leaves it
+    off. The 404 names the variable, because a control that is merely absent reads as a broken URL.
+    """
+    monkeypatch.setattr(settings, "entra_fault_injection", False)
+
+    armed = tenant.post(f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "unavailable"})
+    assert armed.status_code == 404
+    assert "MOCK_ENTRA_FAULT_INJECTION" in armed.json()["detail"]
+    assert tenant.post(f"/entra/{TENANT}/_control/rotate-signing-key").status_code == 404
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").json()["keys"][0]["kid"] == (
+        PUBLISHED_KID
+    )
+
+
+def test_a_fault_stops_being_served_the_moment_the_switch_goes_off(tenant, monkeypatch):
+    """The switch is read when the keys are served, not only when the fault is armed.
+
+    So a lane that armed an outage and then turned fault injection off cannot leave a tenant that
+    refuses to authenticate anybody, with no route left to fix it.
+    """
+    monkeypatch.setattr(settings, "entra_fault_injection", True)
+    assert (
+        tenant.post(
+            f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "unavailable"}
+        ).status_code
+        == 200
+    )
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 503
+
+    monkeypatch.setattr(settings, "entra_fault_injection", False)
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 200
+
+
+def test_an_unknown_fault_name_is_refused_rather_than_read_as_none(tenant, monkeypatch):
+    """A typo must not arm nothing and report success — the fault is requested, never inferred."""
+    monkeypatch.setattr(settings, "entra_fault_injection", True)
+    refused = tenant.post(f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "unavailble"})
+    assert refused.status_code == 422

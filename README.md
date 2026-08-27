@@ -96,6 +96,60 @@ The last one is why `app/entra/keys.py` holds two keys and publishes one: a mock
 valid tokens cannot ask whether forgeries are rejected. `tests/test_entra.py` asserts each of these
 is refused *for its own reason* — the class of error, not merely that one was raised.
 
+### Breaking the tenant on purpose
+
+A token that should be refused is only half of the failure surface. The other half is the tenant
+*itself* failing, and Chemclaw3's front door treats that as a different thing: an unreachable or
+unusable JWKS is a **503 "identity provider unavailable"**, never a 401, because an IdP outage is
+the deployment's failure and not a chemist's bad credential. Its
+`tests/test_entra_end_to_end.py` proves those paths in-process against a throwaway issuer and names
+this surface as the companion for the live lane — so until these controls existed, the live lane
+could only ever run the happy path.
+
+Three behaviours, mirroring that file one for one:
+
+```bash
+MOCK_ENTRA_ENABLED=true MOCK_ENTRA_FAULT_INJECTION=true uvicorn app.main:app --port 8090
+
+# the tenant is down: the keys endpoint 5xxs, which PyJWT's JWKS client raises as a connection
+# error and Chemclaw3 answers 503 for
+curl -sX POST localhost:8090/entra/mock-tenant/_control/jwks-fault \
+  -H 'content-type: application/json' -d '{"fault":"unavailable"}'
+
+# the tenant answers 200 with something that is not a key set — `malformed` is an intercepting
+# proxy's HTML page (dies in `json.load`), `not_a_key_set` is valid JSON that is not a JWKS (dies
+# in `PyJWKSet.from_dict`). Two shapes because they fail in two different libraries.
+curl -sX POST localhost:8090/entra/mock-tenant/_control/jwks-fault \
+  -H 'content-type: application/json' -d '{"fault":"not_a_key_set"}'
+
+# put it back
+curl -sX POST localhost:8090/entra/mock-tenant/_control/jwks-fault \
+  -H 'content-type: application/json' -d '{"fault":"none"}'
+
+# rotate: a new signing key is published *beside* the old one and mints from now on, so tokens
+# issued a minute ago keep validating and a resource server follows by refreshing its key set
+curl -sX POST localhost:8090/entra/mock-tenant/_control/rotate-signing-key
+```
+
+Both controls answer with the tenant's whole state — `jwks_fault`, `signing_kid`,
+`published_kids` — because that is the next thing a driver needs either way.
+
+**They are behind their own switch, and that is the security decision worth stating.**
+`MOCK_ENTRA_ENABLED` turns on minting, which decides *who* gets in. Arming a fault decides whether
+**anyone** does, for every service that trusts this issuer, and the keys endpoint answers whether
+or not minting is enabled — so an unauthenticated control of that reach is a denial-of-service
+switch for anything that can open a socket to this process. `MOCK_ENTRA_FAULT_INJECTION` is
+therefore off by default, the routes are a 404 naming the variable until it is on, and the switch
+is read again *when the keys are served*: turning it off restores a healthy tenant immediately,
+so a lane can never be left with a tenant that refuses everybody and no route to fix it. A fault is
+also never inferred — an unrecognised name is a 422, not a quietly healthy tenant a lane would
+read as "the failure path passed".
+
+`tests/test_entra_faults.py` drives all three through a real `uvicorn` socket with PyJWT's own
+`PyJWKClient`, because what matters is not that the route returned 503 but that the client raises
+the exception class Chemclaw3 maps to one — and that mapping happens inside `urllib`, which the
+in-process ASGI tests never reach.
+
 ## Wiring a Chemclaw3 checkout to this backend
 
 Add to Chemclaw3's `.env` (or export directly):
@@ -243,7 +297,7 @@ pytest
 ```
 
 Covers the ELN list/append/reset endpoints, the stand-in Entra tenant's accept and reject paths,
-and the vendor MCP tool. The ELN fixtures themselves were
+its injected faults (against a real socket, `tests/test_entra_faults.py`), and the vendor MCP tool. The ELN fixtures themselves were
 additionally verified against Chemclaw3's real `JsonExportAdapter`/`OrdJsonAdapter` classes
 directly (not just shape assertions here) — both parsed all seeded entries with zero mapping
 errors.
@@ -276,3 +330,8 @@ local lane, which is where a double belongs.
 | `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories when the app starts |
 | `MOCK_HTE_MAX_RECORDS_PER_DATASET` | `0` (unlimited) | Cap each real HTE dataset (`app/eln/real_hte.py`) to its first N rows; real rows only truncated, never fabricated |
 | `MOCK_MCP_VENDOR_HOST` / `MOCK_MCP_VENDOR_PORT` | `0.0.0.0` / `8091` | Bind address for the vendor MCP server |
+| `MOCK_ENTRA_ENABLED` | `false` | Mint tokens from the stand-in tenant (the keys endpoint answers either way) |
+| `MOCK_ENTRA_ISSUER` | `http://127.0.0.1:8090/entra/mock-tenant/v2.0` | The `iss` minted tokens claim; must equal `CHEMCLAW_ENTRA_ISSUER` |
+| `MOCK_ENTRA_AUDIENCE` | `api://chemclaw` | The `aud` minted tokens carry; must equal `CHEMCLAW_ENTRA_AUDIENCE` |
+| `MOCK_ENTRA_PRIVATE_KEY_PEM` | *(empty)* | A fixed signing key, for a lane whose tokens must survive a restart. Empty generates one per start |
+| `MOCK_ENTRA_FAULT_INJECTION` | `false` | Expose the `_control` routes that break the keys endpoint or rotate the signing key (see "Breaking the tenant on purpose") |

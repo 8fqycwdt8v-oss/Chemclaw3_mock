@@ -4,9 +4,14 @@ Every field but `oid` exists to mint a token that should be *refused*. A lane pr
 Chemclaw3 accepts a good token has proven half of authentication; the other half is that it turns
 away a token minted for another resource, by another issuer, after its expiry, or with a key this
 tenant never published — and each of those is one override here rather than a separate endpoint.
+
+The two control shapes at the foot of the file are the same idea one level up: what a lane asks of
+the tenant *itself* — break your keys endpoint, rotate your signing key — rather than of a token.
 """
 
 from pydantic import BaseModel, Field
+
+from app.entra.faults import JwksFault
 
 
 class TokenRequest(BaseModel):
@@ -43,3 +48,28 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "Bearer"
     expires_in: int
+
+
+class JwksFaultRequest(BaseModel):
+    """Which fault the keys endpoint should serve. `none` puts the real key set back.
+
+    Typed as the literal set rather than a free string so a misspelt fault is a 422 naming the
+    valid values, not a silently healthy tenant a lane then reads as "the failure path passed".
+    """
+
+    fault: JwksFault
+
+
+class TenantState(BaseModel):
+    """What the tenant is doing right now, returned by every control call.
+
+    One shape for both controls, because a driver's next question after either is the same one:
+    which key am I being signed with, which keys are published, and is the endpoint healthy.
+    """
+
+    #: The fault in force, `none` when the tenant is healthy.
+    jwks_fault: JwksFault
+    #: The `kid` a token minted now carries.
+    signing_kid: str
+    #: Every `kid` the JWKS lists, oldest first.
+    published_kids: list[str]
