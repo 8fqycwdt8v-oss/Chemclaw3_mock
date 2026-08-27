@@ -1,4 +1,4 @@
-// The mock's pipeline: gate it, and prove both processes still start.
+// The mock's pipeline: gate it, prove both processes still start, and audit what it installed.
 //
 // **This repository has had no CI of any kind.** Its test modules — the ELN sources, the stand-in
 // Entra tenant, the vendor MCP tool — run only when somebody remembers. That
@@ -84,12 +84,56 @@ pipeline {
         '''
       }
     }
+
+    // **Nothing here checked the dependency closure for known vulnerabilities, in any form.** There
+    // is no `.github/workflows/`, so a GitHub Actions job would be a control that reads as one and
+    // never runs; this pipeline is where this repository's CI actually lives, so this is where the
+    // check goes. Blocking, like the sibling Chemclaw3 checkout's `deps-audit`, which is there
+    // because that pattern caught real advisories.
+    //
+    // **What it can and cannot see, stated rather than implied: this repository has no lockfile.**
+    // `pyproject.toml` carries ranges (`fastapi>=0.115`, `mcp>=1.2,<2`), so there is no recorded
+    // set of exact versions to audit. What is audited instead is the environment the `Install`
+    // stage just resolved — the same one the suite ran against and the same one `start.sh` runs,
+    // frozen to a pin list here. That is the honest maximum: it catches a vulnerable version at
+    // the moment this build resolved it, and it is *not* reproducible, because tomorrow's build
+    // resolves a different set from the same ranges. A green audit is evidence about this build,
+    // never about the next one.
+    //
+    // `pip-audit` goes in its own venv on purpose: installed beside the app, its own dependency
+    // closure would join the audited set and a finding against one of *its* libraries would fail
+    // this build for something this repository does not ship.
+    //
+    // `--no-deps --disable-pip` because `pip freeze` already emits the fully-resolved set —
+    // re-resolving would audit a different closure than the one that was just tested. The project
+    // itself is excluded because it is installed editable and is not on PyPI, so it is the one
+    // distribution that can never be looked up.
+    //
+    // A found vulnerability and an unreachable advisory database share an exit code (1), and
+    // unlike Chemclaw3's `make deps-audit` this stage does not classify them: that target has to
+    // stay usable on a laptop with no network, and this one only ever runs in CI — where an
+    // unreachable database is a supply-chain check that silently did not happen, which is exactly
+    // the shape this stage exists to close. Both fail the build.
+    stage('Dependency audit') {
+      steps {
+        sh '''
+          set -euo pipefail
+          "${PYTHON:-python3.11}" -m venv .venv-audit
+          .venv-audit/bin/python -m pip install --upgrade pip
+          .venv-audit/bin/python -m pip install pip-audit
+
+          .venv/bin/python -m pip freeze --exclude-editable > .audit-requirements.txt
+          echo "auditing $(wc -l < .audit-requirements.txt) resolved distributions"
+          .venv-audit/bin/pip-audit --no-deps --disable-pip --progress-spinner=off -r .audit-requirements.txt
+        '''
+      }
+    }
   }
 
   post {
     always {
-      archiveArtifacts artifacts: '.smoke-*.log', allowEmptyArchive: true
-      sh 'rm -rf .smoke .smoke-*.log || true'
+      archiveArtifacts artifacts: '.smoke-*.log,.audit-requirements.txt', allowEmptyArchive: true
+      sh 'rm -rf .smoke .smoke-*.log .audit-requirements.txt .venv-audit || true'
     }
   }
 }

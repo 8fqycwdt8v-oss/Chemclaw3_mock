@@ -321,6 +321,25 @@ no environment above `dev` runs it and no release descriptor names it — see Ch
 `deploy/jenkins/README.md` and `D-2026-08-26-a-release-is-a-descriptor-and-a-target`. It runs in the
 local lane, which is where a double belongs.
 
+### The dependency audit
+
+The last stage runs `pip-audit`, blocking, over the dependency closure the build just installed —
+this repository had no supply-chain check of any kind, in any form. It is in the Jenkinsfile rather
+than in a GitHub Actions workflow because there are no workflows here: a job nobody runs is a
+control that reads as one and is not.
+
+**There is no lockfile, and that bounds what the audit means.** `pyproject.toml` carries ranges, so
+there is no recorded set of exact versions to scan; what is scanned instead is the environment the
+`Install` stage resolved — the same one the suite ran against and the same one `start.sh` runs —
+frozen to a pin list. So a green audit is evidence about *this build*, not about the next one,
+which will resolve a different set from the same ranges. The tool is installed into its own venv so
+that its dependencies are not part of what it audits.
+
+`.github/dependabot.yml` sits beside it and does the other half: the audit detects, Dependabot
+proposes the bump. With open lower bounds and no lockfile, its reach is the constraints in
+`pyproject.toml` — mostly the pinned upper bound and any advisory whose fix a range excludes — so
+the two are complements, not alternatives.
+
 ## Configuration reference (this backend's own env vars)
 
 | Variable | Default | Meaning |

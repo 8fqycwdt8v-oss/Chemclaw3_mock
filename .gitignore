@@ -219,3 +219,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# The dependency audit builds its own venv beside the app venv (see the Jenkinsfile).
+.venv-audit/
+.audit-requirements.txt

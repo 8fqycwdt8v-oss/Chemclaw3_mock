@@ -1,0 +1,36 @@
+# Automated dependency updates.
+#
+# The `Dependency audit` stage in the Jenkinsfile *detects* a vulnerable closure. What nothing does
+# is propose the fix: a finding turns into a red build and then into somebody hand-editing a
+# constraint, and that step is what decides how long the window between "we know" and "it is fixed"
+# actually is. Dependabot opens the pull request instead, and it does not care which CI runs.
+#
+# **What it can reach here, stated plainly, because this repository has no lockfile.**
+# `pyproject.toml` declares ranges (`fastapi>=0.115`, `pyjwt[crypto]>=2.9`), and an open lower bound
+# is already satisfied by every new release — so on a version update there is usually nothing for
+# the pip updater to rewrite. Where it does act is exactly where it matters most: a constraint that
+# *excludes* the fixed version, which is the shape a security advisory produces, and the one pin
+# this tree carries (`mcp>=1.2,<2`) if the 2.x line ever becomes the only supported one. So this is
+# a complement to the audit stage and not a replacement for it — the stage is what sees a
+# transitive dependency at all, since nothing here pins one.
+#
+# There is no `github-actions` entry because this repository has no workflows: its CI is the
+# Jenkinsfile. An updater for an ecosystem that is not used would be a control that reads as one.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+    # Grouped into one pull request rather than one per package: this is a test double with a
+    # five-line dependency list, and a pull request per bump would cost more review than the tree
+    # is worth. Security updates are exempt from the grouping, so a CVE fix is never queued behind
+    # an unrelated minor bump.
+    groups:
+      python-minor-and-patch:
+        applies-to: version-updates
+        update-types: ["minor", "patch"]
