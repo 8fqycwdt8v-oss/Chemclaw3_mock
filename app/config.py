@@ -64,6 +64,16 @@ class Settings:
         # Empty (the default) generates one per start, which is what a mock should do: a signing
         # key committed to a repository is one that eventually signs something real.
         self.entra_private_key_pem = _env_str("MOCK_ENTRA_PRIVATE_KEY_PEM", "")
+        # Fault injection for the tenant's keys endpoint (app/entra/faults.py): serve an outage,
+        # a body that is not a key set, or rotate the signing key, so the live lane can drive the
+        # resilience paths Chemclaw3 only proves in-process.
+        #
+        # **A second switch beside MOCK_ENTRA_ENABLED, on purpose.** Minting decides who gets in;
+        # arming a fault decides whether anyone does, for every service trusting this issuer, and
+        # the keys route answers whether or not minting is enabled. An unauthenticated control of
+        # that reach is a denial-of-service switch, so it is opt-in per run and read again on every
+        # request rather than only when a fault is armed.
+        self.entra_fault_injection = _env_bool("MOCK_ENTRA_FAULT_INJECTION", False)
 
         # MCP vendor tool server (run standalone, see app/mcp_tools/vendor_server.py).
         self.mcp_vendor_host = _env_str("MOCK_MCP_VENDOR_HOST", "0.0.0.0")
