@@ -165,3 +165,40 @@ def test_the_key_set_is_still_a_key_set_when_nothing_is_armed(tenant):
     served = httpx.get(_keys_url(tenant))
     assert served.status_code == 200
     assert [key.key_id for key in PyJWKSet.from_dict(served.json()).keys] == [keys.PUBLISHED_KID]
+
+
+def test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced(tenant):
+    """The contract a live lane has to drive: arming a fault does **not** break a warm front door.
+
+    Every other test here builds `PyJWKClient(..., cache_keys=False)` per assertion, which is a
+    cold client and proves only that the *first* fetch after arming fails. Chemclaw3's
+    `api/auth.py::_client_for` does the opposite: one client per endpoint for the process lifetime,
+    built with `timeout=` alone, so PyJWT's `cache_jwk_set=True, lifespan=300` defaults apply and
+    `get_signing_keys()` answers from the cached document without touching the socket. Measured
+    against Chemclaw3's production `create_app()` with `entra_required=True`: once one token has
+    validated, arming any of the three faults leaves `/sessions` answering 200, not the 503 the
+    README used to promise — for the whole lifespan.
+
+    So this pins both halves: that a warm client is blind while the tenant really is down, and the
+    route out of it that does not need a 300-second wait. An unknown `kid` is what forces
+    `get_signing_key` past its own cache, and this tenant can mint one on demand — rotate, then
+    mint — which is why the rotation control is the fault surface's companion rather than a
+    separate toy. (Chemclaw3 rate-limits that forced refresh with
+    `entra_jwks_refresh_cooldown_seconds`, so a driver gets one of these per cooldown.)
+    """
+    client = PyJWKClient(_keys_url(tenant), timeout=5)
+    assert client.jwk_set_cache is not None, "PyJWT stopped caching the key set by default"
+    assert client.jwk_set_cache.lifespan == 300, (
+        "PyJWT's default JWKS lifespan moved; README.md quotes 300 seconds as the blind window"
+    )
+    assert [key.key_id for key in client.get_signing_keys()] == [keys.PUBLISHED_KID]
+
+    _arm(tenant, "unavailable")
+    assert httpx.get(_keys_url(tenant)).status_code == 503, "the tenant is not actually down"
+    assert [key.key_id for key in client.get_signing_keys()] == [keys.PUBLISHED_KID], (
+        "a warm client saw the fault without a refresh — README.md's recovery advice is now wrong"
+    )
+
+    _rotate(tenant)
+    with pytest.raises(jwt.PyJWKClientConnectionError):
+        client.get_signing_key_from_jwt(_mint(tenant, oid="u-alice"))

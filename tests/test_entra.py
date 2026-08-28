@@ -183,11 +183,13 @@ def test_the_fault_control_surface_is_absent_unless_a_run_asks_for_it(tenant, mo
     )
 
 
-def test_a_fault_stops_being_served_the_moment_the_switch_goes_off(tenant, monkeypatch):
+def test_a_fault_is_never_served_by_a_process_without_the_capability(tenant, monkeypatch):
     """The switch is read when the keys are served, not only when the fault is armed.
 
-    So a lane that armed an outage and then turned fault injection off cannot leave a tenant that
-    refuses to authenticate anybody, with no route left to fix it.
+    One switch read in both places rather than two, so a stored fault cannot outlive the capability
+    inside a process. **This is not the documented recovery it was once described as** — settings
+    are frozen at import and the only writer of that attribute in a running process is this
+    `monkeypatch`, so what puts a live tenant back is the control route below, or a restart.
     """
     monkeypatch.setattr(settings, "entra_fault_injection", True)
     assert (
@@ -199,6 +201,32 @@ def test_a_fault_stops_being_served_the_moment_the_switch_goes_off(tenant, monke
     assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 503
 
     monkeypatch.setattr(settings, "entra_fault_injection", False)
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 200
+
+
+def test_the_recovery_from_an_armed_fault_is_the_control_route_not_the_environment(
+    tenant, monkeypatch
+):
+    """What actually puts a broken tenant back, and what demonstrably does not.
+
+    `README.md` and `app/entra/faults.py` both used to promise that turning
+    `MOCK_ENTRA_FAULT_INJECTION` off "puts the tenant back to healthy immediately". It does not:
+    `app/config.py` builds `settings` once at import and `_env_bool` reads the environment there
+    and nowhere else, so a live process never sees the change — measured against uvicorn before
+    this test was written, and pinned here so the claim cannot come back into the prose without
+    somebody making it true first.
+    """
+    monkeypatch.setattr(settings, "entra_fault_injection", True)
+    tenant.post(f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "unavailable"})
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 503
+
+    monkeypatch.setenv("MOCK_ENTRA_FAULT_INJECTION", "false")
+    monkeypatch.delenv("MOCK_ENTRA_FAULT_INJECTION", raising=False)
+    assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 503
+
+    restored = tenant.post(f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "none"})
+    assert restored.status_code == 200
+    assert restored.json()["jwks_fault"] == "none"
     assert tenant.get(f"/entra/{TENANT}/discovery/v2.0/keys").status_code == 200
 
 

@@ -139,9 +139,11 @@ Both controls answer with the tenant's whole state — `jwks_fault`, `signing_ki
 **anyone** does, for every service that trusts this issuer, and the keys endpoint answers whether
 or not minting is enabled — so an unauthenticated control of that reach is a denial-of-service
 switch for anything that can open a socket to this process. `MOCK_ENTRA_FAULT_INJECTION` is
-therefore off by default, the routes are a 404 naming the variable until it is on, and the switch
-is read again *when the keys are served*: turning it off restores a healthy tenant immediately,
-so a lane can never be left with a tenant that refuses everybody and no route to fix it. A fault is
+therefore off by default and the routes are a 404 naming the variable until it is on. The route
+back from an armed fault is the control route — `{"fault":"none"}` above — or a restart, which is
+why both controls answer with the tenant's whole state. **Not** the environment variable: this
+process reads its environment once, at import, so unsetting `MOCK_ENTRA_FAULT_INJECTION` in a live
+shell leaves the keys endpoint 503ing exactly as before (measured). A fault is
 also never inferred — an unrecognised name is a 422, not a quietly healthy tenant a lane would
 read as "the failure path passed".
 
@@ -149,6 +151,46 @@ read as "the failure path passed".
 `PyJWKClient`, because what matters is not that the route returned 503 but that the client raises
 the exception class Chemclaw3 maps to one — and that mapping happens inside `urllib`, which the
 in-process ASGI tests never reach.
+
+### An armed fault is invisible to a *warm* front door
+
+This is the part a live lane has to plan around, and it is a property of the reading side rather
+than a defect here. Chemclaw3's `api/auth.py::_client_for` keeps one `PyJWKClient` per endpoint for
+the process lifetime and passes only `timeout=`, so PyJWT's defaults — `cache_jwk_set=True,
+lifespan=300` — apply, and `get_signing_keys()` answers from the cached document without touching
+a socket. Once **one** token has validated, this tenant is not consulted again for five minutes.
+
+Measured against Chemclaw3's production `create_app()` with `entra_required=True` pointed at this
+mock, nothing patched but the model: cold `POST /sessions` → 200, which warms the key set; then
+`unavailable`, `malformed` and `not_a_key_set` armed in turn, with the tenant confirming each in
+its control response → 200, 200, 200. Rebuilt at `lifespan=2`, the same probe gives 200 at t+0 and
+503 at t+2.5 s — so the blind window is exactly the lifespan, not a permanent hole.
+
+Three ways to drive the 503, cheapest first:
+
+1. **Mint under a `kid` the front door has never seen** — rotate, then mint. An unknown `kid` sends
+   PyJWT's `get_signing_key` past its own cache to this tenant, where the armed fault is waiting.
+   Chemclaw3 bounds that to one forced refresh per `entra_jwks_refresh_cooldown_seconds` (60 s).
+2. **Arm the fault before the front door has validated anything.** A cold key set fetches — which
+   is what both repositories' in-process tests get, and what a freshly started `make live-up` gets.
+3. **Wait out the 300 s lifespan**, or restart the front door.
+
+```bash
+curl -sX POST localhost:8090/entra/mock-tenant/_control/jwks-fault \
+  -H 'content-type: application/json' -d '{"fault":"unavailable"}'
+curl -sX POST localhost:8090/entra/mock-tenant/_control/rotate-signing-key
+curl -sX POST localhost:8090/entra/mock-tenant/oauth2/v2.0/token \
+  -H 'content-type: application/json' -d '{"oid":"u-alice"}'   # signed by the new kid
+```
+
+`test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced` pins both halves —
+that a warm client is blind while the tenant really is 503ing, and that a rotation plus a mint
+makes the fault reach it — and it asserts PyJWT's 300 s default, so a dependency bump that moves
+the window turns this section red rather than leaving it quietly wrong.
+
+The asymmetry is worth stating: the **rotation** control has always worked live for the same
+reason the faults do not. It changes the `kid`, and an unknown `kid` is precisely what bypasses the
+cache.
 
 ## Wiring a Chemclaw3 checkout to this backend
 
