@@ -9,26 +9,38 @@ throwaway issuer and names *this* surface as its companion for the live lane —
 can only succeed cannot stand in for the failures, so the live lane exercised the happy path alone.
 These faults close that: the same three behaviours, over a real socket.
 
+**What an armed fault does *not* do is break a front door that has already validated a token.**
+`api/auth.py::_client_for` there keeps one `PyJWKClient` per endpoint for the process lifetime with
+PyJWT's `cache_jwk_set=True, lifespan=300`, so a warm key set answers from memory and this tenant
+is not consulted again for five minutes — measured: with each fault armed, that front door still
+answers 200. Arming one is observable promptly only to a caller who has not fetched yet, or via a
+`kid` it has never seen (`_control/rotate-signing-key`, then mint), which is what sends
+`get_signing_key` past its own cache. `README.md`'s "invisible to a warm front door" section is the
+recipe, and `tests/test_entra_faults.py` pins both halves.
+
 **Two switches, not one, and this is the second.** `MOCK_ENTRA_ENABLED` turns on minting, which
 decides *who* can get in. Arming a fault decides whether **anyone** can, for every service that
 trusts this issuer, and the keys route is served whether or not minting is enabled — so an
 unauthenticated control that could break authentication for a whole stack is a denial-of-service
 switch reachable by anything that can open a socket to this process. It is therefore off by
-default, refused with a 404 naming the variable, and read again *at serve time*: turning
-`MOCK_ENTRA_FAULT_INJECTION` off puts the tenant back to healthy immediately, so a lane can never
-be left with a tenant that refuses everybody and no route to fix it.
+default and refused with a 404 naming the variable.
+
+**The route back from an armed fault is the control route — `{"fault": "none"}` — or a restart.**
+Not the environment variable: `app/config.py` builds `settings` once at import and reads the
+environment there and nowhere else, so unsetting `MOCK_ENTRA_FAULT_INJECTION` in a live shell
+changes nothing about what this tenant serves. That is why the arming route answers with the whole
+tenant state, and why `router.py`'s 404 says *start this process with* the variable. This docstring
+used to call the serve-time check a recovery, which sent a reader to unset a variable nothing reads
+again.
 """
 
-from typing import Literal, get_args
+from typing import Literal
 
 from app.config import settings
 
 #: What the keys endpoint serves. `none` is the real key set; each other value is one of the two
 #: failure shapes Chemclaw3 maps onto a 503.
 JwksFault = Literal["none", "unavailable", "malformed", "not_a_key_set"]
-
-#: Every value the control route accepts, for the route's own error message.
-JWKS_FAULTS: tuple[str, ...] = get_args(JwksFault)
 
 #: An intercepting proxy's error page: a 200 whose body is not JSON at all, so a JWKS client dies
 #: in `json.load` with a `ValueError`.
@@ -50,9 +62,10 @@ def arm(fault: JwksFault) -> None:
 def armed() -> JwksFault:
     """The fault in force — always `none` while `MOCK_ENTRA_FAULT_INJECTION` is off.
 
-    Consulting the switch here rather than only in the control route is what makes turning it off a
-    recovery: the fault is stored, but it is never *served* by a process whose operator has taken
-    the capability away.
+    One switch read in both places rather than two, so a process that never asked for the
+    capability cannot serve a fault whatever else in it calls `arm()`. It is not a live recovery:
+    the value comes from settings frozen at import, and the only writer of it in a running process
+    is a test's `monkeypatch` — see the module docstring for what does put the tenant back.
     """
     return _armed if settings.entra_fault_injection else "none"
 
