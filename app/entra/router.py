@@ -83,10 +83,17 @@ def mint(tenant: str, request: TokenRequest) -> TokenResponse:
     if not settings.entra_enabled:
         raise HTTPException(status_code=404, detail="mock entra tenant is disabled")
 
+    issued_at = int(time.time())
     claims: dict[str, object] = {
         "aud": request.audience or settings.entra_audience,
         "iss": request.issuer or _issuer(),
-        "iat": int(time.time()),
+        "iat": issued_at,
+        # Real Entra sets `nbf` on every token it issues, so this one does too. Nothing on the
+        # reading side forces it — Chemclaw3 requires only `exp` — which is exactly why it belongs
+        # here: a mock is worth what it is faithful about, and a claim omitted because no validator
+        # happens to demand it is a difference between this token and the real one that every green
+        # lane run would keep quiet about.
+        "nbf": issued_at,
         "oid": request.oid,
         "tid": tenant,
     }
@@ -96,7 +103,20 @@ def mint(tenant: str, request: TokenRequest) -> TokenResponse:
         claims["preferred_username"] = request.upn
     if request.roles:
         claims["roles"] = request.roles
-    if request.groups:
+    if request.group_overage:
+        # The overage: `groups` is *replaced*, which is the whole shape. `src1` and the
+        # `getMemberObjects` endpoint are what a real token carries, and the endpoint is a Graph
+        # call — one this mock does not serve and Chemclaw3 does not make (D-089 forbids it), so
+        # what a lane proves here is that an overage is recognised, not that it is resolved.
+        claims["_claim_names"] = {"groups": "src1"}
+        claims["_claim_sources"] = {
+            "src1": {
+                "endpoint": (
+                    f"https://graph.windows.net/{tenant}/users/{request.oid}/getMemberObjects"
+                )
+            }
+        }
+    elif request.groups:
         claims["groups"] = request.groups
 
     kid = keys.UNPUBLISHED_KID if request.unpublished_key else keys.signing_kid()

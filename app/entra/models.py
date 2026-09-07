@@ -40,6 +40,14 @@ class TokenRequest(BaseModel):
     #: Omit `exp` entirely. Distinct from an expired token and not covered by it: a validator that
     #: only checks `exp` when present accepts a token that simply leaves it out, forever.
     omit_expiry: bool = False
+    #: Mint the shape Entra emits past roughly 150 group memberships: `_claim_names` and
+    #: `_claim_sources` pointing at Graph, **in place of** `groups`. The odd one out in this list —
+    #: every other field mints a token that should be *refused*, and this one mints a token that is
+    #: perfectly valid and carries no group entitlements. A backend has to tell that apart from a
+    #: user who is in no groups, because reading it as the latter quietly denies the users with the
+    #: most access, and Chemclaw3 does. In place of rather than beside: a token carrying both would
+    #: take neither path, and the substitution is what the overage *is*.
+    group_overage: bool = False
 
 
 class TokenResponse(BaseModel):
