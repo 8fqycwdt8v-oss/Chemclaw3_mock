@@ -96,6 +96,49 @@ The last one is why `app/entra/keys.py` holds two keys and publishes one: a mock
 valid tokens cannot ask whether forgeries are rejected. `tests/test_entra.py` asserts each of these
 is refused *for its own reason* — the class of error, not merely that one was raised.
 
+### Minting a token that is perfectly valid and still carries no groups
+
+`"group_overage": true` is the odd one out: it is not a way to be invalid. Past roughly 150
+directory memberships, real Entra stops putting `groups` in the token and emits `_claim_names` /
+`_claim_sources` pointing at a Graph endpoint instead — the token is entirely valid and the group
+entitlements are simply not in it. A backend has to tell that apart from a user who is in no
+groups, because reading it as the latter quietly denies exactly the users with the *most* access,
+and Chemclaw3 does (`api/auth.py::_principal_from_claims` logs it and counts
+`chemclaw_group_claim_overage_total`). That branch was unit-tested there and reachable from no
+end-to-end lane, because this tenant could not mint the shape.
+
+```bash
+curl -s localhost:8090/entra/mock-tenant/oauth2/v2.0/token \
+  -H 'content-type: application/json' \
+  -d '{"oid":"u-alice","roles":["process-chemist"],"group_overage":true}'
+```
+
+`groups` is *replaced*, not accompanied — a token carrying both would take neither path, and the
+substitution is what the overage is. Measured against Chemclaw3's real `validate_token` over a
+socket, with its own `PyJWKClient` fetching this JWKS: the token validates, `roles` survives,
+`chemclaw_group_claim_overage_total` goes 0 → 1 and the WARNING names the `oid`.
+
+### Two shapes that are the real thing's, whether or not anything checks them
+
+**`nbf`.** Every minted token carries one, equal to `iat`, because every token real Entra issues
+does. Nothing on the reading side forces it — Chemclaw3 requires only `exp` — which is the reason
+it is pinned by a test here rather than left to that side: every green lane run is evidence about
+*this* token, so a claim missing only because no validator happens to demand it is a difference
+nobody would ever be told about.
+
+**The JWK's `alg`, which is not the defect it looks like.** Real Entra's JWKS entries carry no
+`alg` (they carry `x5t`/`x5c`/`issuer`); `app/entra/keys.py` publishes `"alg": "RS256"`. Measured
+under PyJWT 2.13, which is what Chemclaw3 validates with: `PyJWK` infers RS256 from `kty` and both
+documents parse identically, so this is cosmetic and is left alone rather than churned.
+
+**The v1-vs-v2 issuer mismatch is drivable today, and deliberately not a feature.**
+`sts.windows.net/{tid}` against `login.microsoftonline.com/{tid}/v2.0` is the commonest real-tenant
+misconfiguration, and reproducing it needs no code here: Chemclaw3 derives the expected issuer from
+`CHEMCLAW_ENTRA_ISSUER` alone, so setting `MOCK_ENTRA_ISSUER` to one form while that stays the
+other *is* the mismatch, and `{"issuer": "..."}` on a single mint is the same thing for one token.
+What is genuinely unreachable is a tenant whose *discovery document* disagrees with its own tokens
+— and Chemclaw3 never reads discovery, so modelling that would mock a document with no reader.
+
 ### Breaking the tenant on purpose
 
 A token that should be refused is only half of the failure surface. The other half is the tenant

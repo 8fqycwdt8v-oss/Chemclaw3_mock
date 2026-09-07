@@ -40,8 +40,8 @@ branch or remote required for dev).
 set `CHEMCLAW_NOTE_REPO_DIR` to its absolute path.
 
 **Confirmed and extended, 2026-08-02.** A fresh `git init` is *not* sufficient, and the failure is
-silent. In a 190-probe live run **every** PR-gate write failed — 14 attempts, 0 notes proposed —
-because `GitNoteSubmitter` begins with `git fetch <git_remote> <note_base_branch>`, defaulting to
+silent. In a 190-probe live run **every** note write failed — 14 attempts, 0 notes written —
+because the git note writer begins with `git fetch <git_remote> <note_base_branch>`, defaulting to
 `origin` and `main`. A bare `git init` clone has no `origin`, and `git init` names the branch
 `master` on many installs, so both halves miss.
 
@@ -55,6 +55,22 @@ The notes repo needs three things, all of which belong in the runbook:
 It should also be seeded with the existing `knowledge/` tree, because Chemclaw3 resolves
 `knowledge_path` as `note_repo_dir / knowledge_dir` — point it at an empty clone and every reader
 sees an empty graph, with no error.
+
+**Still live, re-verified 2026-09-07 — and only the name of the consumer changed.** The paragraphs
+above were written while notes reached the graph through a PR gate, and that gate is gone
+(`D-2026-09-05-the-gate-follows-behaviour-not-knowledge`): a note is now committed straight onto
+the base branch and pushed, by `chemclaw.kg.git_writer.GitNoteWriter` — no `note/<id>` branch and
+no human merge. **None of the three requirements below moved**, because they were never properties
+of the gate: the writer still reads `note_base_branch` and `git_remote`, still opens with
+`git fetch <remote> <base>`, and still pushes that base branch. What did change is that the third
+requirement is now checked with an error of its own — a checkout parked on any branch but the base
+is refused by name rather than failing somewhere further down. The class in the traceback above is
+today's `GitWriteError` (it was `GitSubmitError`, then a bare `RuntimeError`); the wording of its
+message has been rewritten since, so grep for `note_repo_dir` rather than for the sentence.
+
+The one word that *was* stale is "PR-gate", and correcting it does not weaken this report: there is
+now no review step between the agent and the graph, so a misconfigured notes repo is a knowledge
+write path that is silently dead, with nothing downstream that would have caught it.
 
 Two upstream defects made this hard to diagnose, both fixed on 2026-08-02: `GitSubmitError` was a
 `RuntimeError` rather than a `ChemclawError`, so the agent was told only "Error: Function failed."

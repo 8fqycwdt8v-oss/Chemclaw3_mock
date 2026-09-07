@@ -235,3 +235,34 @@ def test_an_unknown_fault_name_is_refused_rather_than_read_as_none(tenant, monke
     monkeypatch.setattr(settings, "entra_fault_injection", True)
     refused = tenant.post(f"/entra/{TENANT}/_control/jwks-fault", json={"fault": "unavailble"})
     assert refused.status_code == 422
+
+
+def test_a_minted_token_carries_the_nbf_real_entra_always_sets(tenant):
+    """`nbf`, because a mock's job is the shape of the real thing rather than the minimum accepted.
+
+    Chemclaw3's validator requires only `exp` (`options={"require": ["exp"]}`), so a token without
+    `nbf` sails through and nothing here would ever notice the omission. That is precisely why it
+    has to be asserted rather than left to the reading side: every green lane run against a token
+    this tenant mints is evidence about *this* token, and a claim real Entra sets on every token it
+    issues is one the shape has to have. Equal to `iat`, which is what a real tenant emits.
+    """
+    claims = _verify(tenant, _mint(tenant, oid="u-alice"))
+    assert claims["nbf"] == claims["iat"]
+
+
+def test_a_group_overage_mints_the_claim_shape_a_backend_has_to_branch_on(tenant):
+    """Past ~150 memberships real Entra drops `groups` for `_claim_names`/`_claim_sources`.
+
+    Chemclaw3 branches on exactly that (`api/auth.py::_principal_from_claims` — an overage is
+    reported and counted rather than read as "this user is in no groups", which would quietly deny
+    the users with the *most* access). That branch was unit-tested there and unreachable from any
+    end-to-end lane, because this tenant had no way to mint the shape: asking for one was not an
+    error, it was a plain token, which is the failure mode a driver cannot see.
+
+    The `groups` claim is *replaced*, not accompanied: a token carrying both would take neither
+    path, and the substitution is what the real overage is.
+    """
+    claims = _verify(tenant, _mint(tenant, oid="u-alice", groups=["g-1"], group_overage=True))
+    assert "groups" not in claims
+    assert claims["_claim_names"] == {"groups": "src1"}
+    assert "getMemberObjects" in claims["_claim_sources"]["src1"]["endpoint"]
