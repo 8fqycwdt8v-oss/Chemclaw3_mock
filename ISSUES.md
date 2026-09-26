@@ -22,7 +22,21 @@ was sound and the same live run confirmed four genuinely silent rules of exactly
 `peroxide` missed sodium peroxide, `hydrazine` missed UDMH, `n-halamine` missed chloramine-T, and
 `complex-hydride-with-chlorinated-solvent` missed 1,2-dichloroethane. All four are fixed upstream.
 
-## Issue 2: CHEMCLAW_NOTE_REPO_DIR must be set for ELN sync to work (missing from deployment docs)
+## Issue 2 (RESOLVED upstream): CHEMCLAW_NOTE_REPO_DIR must be set for note writing to work (missing from deployment docs)
+
+**Status: closed by Chemclaw3 PR #450 (2026-09-26).** The consumer is no longer ELN sync — an ELN
+transcription is data and writes no note — but `GitNoteWriter`, the one knowledge write path. The
+Chemclaw3 runbook (`docs/guides/runbook.md`) now states what the notes repo needs, each requirement
+driven against the writer: a dedicated clone with a real `.git`, checked out on
+`CHEMCLAW_NOTE_BASE_BRANCH`, a remote that already has that branch, a seeded `knowledge/`, and a
+committer identity. A missing remote or base branch now fails as a retryable `GitRemoteError`
+rather than silently. "Must not be shallow" was measured false and dropped.
+
+Two parts stay open *upstream*, not here: nothing in the chart supplies a git committer identity,
+so a container's every commit fails with `Author identity unknown` (a Chemclaw3 `BACKLOG.md` row);
+and `/readyz` still does not probe the note repo — declined for now, because checking the remote
+needs a network fetch and the worker's readiness path does no I/O. The report below is kept for why
+it was filed.
 
 When the `ElnSyncWorkflow` runs via Temporal, it fails with:
 
