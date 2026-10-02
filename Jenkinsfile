@@ -9,9 +9,14 @@
 // **It publishes nothing and deploys nowhere, deliberately.** This is a test double: a stand-in
 // ELN source, Entra tenant and vendor MCP tool. Beside the real integrations it would give
 // the system two answers to one question, so no environment above `dev` runs it and no release
-// descriptor names it (`D-2026-08-26-a-release-is-a-descriptor-and-a-target` in Chemclaw3). Where a
-// dev environment wants it in-cluster, it needs an image and a chart first — neither exists here,
-// and inventing them for a double nobody has asked to deploy would be the wrong order of work.
+// descriptor names it (`D-2026-08-26-a-release-is-a-descriptor-and-a-target` in Chemclaw3).
+//
+// **It does build the image, and that does not change the line above.** A local kind cluster runs
+// the double in-cluster from `Containerfile`, built on the developer's machine and loaded with
+// `kind load`, so the image is checked here the way the start scripts are: it is built, both of
+// its processes are started, and both answer. The build is tagged per run and removed afterwards.
+// Nothing is pushed, there is no registry parameter, and no chart lives here. An image only
+// becomes a deploy once it is published and named somewhere, and this pipeline does neither.
 pipeline {
   agent any
 
@@ -81,6 +86,62 @@ pipeline {
           test "${code}" != "000" \
             || { echo "the vendor MCP server never answered" >&2; cat .smoke-vendor.log; exit 1; }
           echo "backend and vendor MCP server both start (vendor /mcp answered ${code})"
+        '''
+      }
+    }
+
+    // The image (`Containerfile`) is built and run here, and pushed nowhere. A local cluster (kind)
+    // runs this double in-cluster from a locally built and loaded image, so the image has to work.
+    // Before this stage nothing built it, and a broken image showed up as a broken backend at
+    // `kind load` time. The stage asks the same questions as the one above, this time of the
+    // image: the backend answers `/healthz` and has seeded both export dirs, and the vendor's MCP
+    // transport answers. Both run as a UID the image did not create (in group 0, the
+    // OpenShift-restricted shape), because a double that only runs as its own UID is not rootless
+    // in the way a cluster means it. No registry, no credential, no tag beyond this build.
+    stage('Image builds and both processes answer') {
+      steps {
+        sh '''
+          set -euo pipefail
+          runner="$(command -v docker || command -v podman || true)"
+          if [ -z "${runner}" ]; then
+            echo "no docker or podman on this agent: the image stage cannot run here" >&2
+            exit 1
+          fi
+          image="chemclaw3-mock:ci-${BUILD_NUMBER:-local}"
+          "${runner}" build -f Containerfile -t "${image}" .
+          cleanup() {
+            "${runner}" rm -f mock-ci-backend-${BUILD_NUMBER:-local} mock-ci-vendor-${BUILD_NUMBER:-local} >/dev/null 2>&1 || true
+            "${runner}" rmi -f "${image}" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          "${runner}" run -d --name mock-ci-backend-${BUILD_NUMBER:-local} --user 100123:0 \
+            -e MOCK_HTE_MAX_RECORDS_PER_DATASET=5 -p 127.0.0.1::8090 "${image}" >/dev/null
+          "${runner}" run -d --name mock-ci-vendor-${BUILD_NUMBER:-local} --user 100123:0 \
+            -p 127.0.0.1::8091 "${image}" ./start-mcp.sh >/dev/null
+          backend_port="$("${runner}" port mock-ci-backend-${BUILD_NUMBER:-local} 8090 | head -1 | sed 's/.*://')"
+          vendor_port="$("${runner}" port mock-ci-vendor-${BUILD_NUMBER:-local} 8091 | head -1 | sed 's/.*://')"
+
+          for _ in $(seq 1 60); do
+            curl -sf "http://127.0.0.1:${backend_port}/healthz" >/dev/null && break || sleep 1
+          done
+          curl -sf "http://127.0.0.1:${backend_port}/healthz" \
+            || { echo "the image's backend did not answer /healthz" >&2; "${runner}" logs mock-ci-backend-${BUILD_NUMBER:-local}; exit 1; }
+          seeded="$("${runner}" exec mock-ci-backend-${BUILD_NUMBER:-local} sh -c \
+            'ls /app/data/eln/exports/*.json | wc -l; ls /app/data/eln/exports/ord/*.json | wc -l')"
+          echo "seeded entries (eln, ord): $(echo ${seeded})"
+          for n in ${seeded}; do
+            test "${n}" -gt 0 || { echo "the image's backend started but seeded an empty export dir" >&2; exit 1; }
+          done
+
+          for _ in $(seq 1 30); do
+            curl -s -o /dev/null "http://127.0.0.1:${vendor_port}/mcp" && break || sleep 1
+          done
+          code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -X POST \
+            -H 'content-type: application/json' -d '{}' "http://127.0.0.1:${vendor_port}/mcp" || echo 000)"
+          test "${code}" != "000" \
+            || { echo "the image's vendor MCP server never answered" >&2; "${runner}" logs mock-ci-vendor-${BUILD_NUMBER:-local}; exit 1; }
+          echo "image: backend healthy and seeded, vendor /mcp answered ${code}"
         '''
       }
     }
