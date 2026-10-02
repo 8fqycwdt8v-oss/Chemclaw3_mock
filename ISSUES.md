@@ -90,3 +90,23 @@ Two upstream defects made this hard to diagnose, both fixed on 2026-08-02: `GitS
 `RuntimeError` rather than a `ChemclawError`, so the agent was told only "Error: Function failed."
 and retried five times permuting its *arguments*; and `/readyz` does not probe the note repo, so a
 deployment whose only knowledge-write path is dead still reports ready.
+
+## Issue 3 (OPEN): `test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced` fails on PyJWT 2.15
+
+**Found 2026-10-02, on a fresh `pip install -e '.[dev]'` of `main` (0918cf2), before any change.**
+The rest of the suite passes; this one test fails with `PyJWKClientError: Unable to find a signing
+key that matches: "mock-entra-key-2"` where it expects `PyJWKClientConnectionError`.
+
+PyJWT 2.15 added `PyJWKClient(..., cooldown_duration=30)`: after an unknown `kid`, the client
+refreshes the key set only if its last successful fetch is older than the cooldown. The test warms
+the client, arms an outage, rotates, and expects the unknown `kid` to *force* a refetch that hits
+the outage — but the warm fetch was milliseconds earlier, so 2.15 skips the refetch and reports a
+missing key instead. `pyproject.toml` pins `pyjwt[crypto]>=2.9`, so any fresh install now resolves
+this behaviour.
+
+Two things to settle, neither done here: the test's expectation (build its client with
+`cooldown_duration=0`, or assert the 2.15 behaviour), and the README's "rotate, then mint" recipe
+for forcing a warm front door past its cache, which this changes for any resource server using
+PyJWT's own client unmodified. Chemclaw3's `api/auth.py` keeps its own forced-refresh cooldown
+(`entra_jwks_refresh_cooldown_seconds`), so whether its front door is affected depends on how its
+`PyJWKClient` subclass interacts with PyJWT's new one — worth a check there.
