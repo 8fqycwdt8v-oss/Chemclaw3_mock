@@ -5,20 +5,27 @@ MCP server, which has no health route). The same question the Jenkinsfile asks e
 the backend must answer `/healthz` with 200; the vendor must answer *any* HTTP status on `/mcp`,
 because a bare POST is not a valid MCP `initialize` and the point is only that the transport is up.
 A connection failure on both ports is unhealthy.
+
+The backend serves TLS when `MOCK_SSL_CERTFILE` is set (`start.sh`; the browser sign-in flow needs
+it), so the probe follows: https on loopback with verification off, because the certificate is a
+throwaway the probe has no reason to trust and the question is only whether the process answers.
 """
 
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.request
 
-_BACKEND = f"http://127.0.0.1:{os.environ.get('MOCK_SERVER_PORT', '8090')}/healthz"
+_TLS = bool(os.environ.get("MOCK_SSL_CERTFILE"))
+_BACKEND = f"{'https' if _TLS else 'http'}://127.0.0.1:{os.environ.get('MOCK_SERVER_PORT', '8090')}/healthz"
 _VENDOR = f"http://127.0.0.1:{os.environ.get('MOCK_MCP_VENDOR_PORT', '8091')}/mcp"
 
 
 def _backend_healthy() -> bool:
     try:
-        with urllib.request.urlopen(_BACKEND, timeout=3) as response:
+        context = ssl._create_unverified_context() if _TLS else None  # noqa: S323 - loopback probe
+        with urllib.request.urlopen(_BACKEND, timeout=3, context=context) as response:
             return response.status == 200
     except (urllib.error.URLError, OSError):
         return False
