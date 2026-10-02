@@ -2,8 +2,10 @@
 
 Only the keys route is what Chemclaw3 actually calls at runtime — its front door fetches the JWKS
 and nothing else. Discovery is here because it costs four lines and it is what a human reaches for
-when they want to know whether the thing is wired up. The mint is for whoever is driving the test:
-a shell script, a Playwright fixture, `make live-probes`.
+when they want to know whether the thing is wired up — and, since the browser sign-in in
+`oidc.py`, what MSAL.js reads to find the authorize, token and logout endpoints. The mint is for
+whoever is driving the test: a shell script, a Playwright fixture, `make live-probes`. The token
+route serves both it (a JSON body) and the browser flow's grants (a form body).
 
 The two `_control` routes are for the same driver, and they are what lets a lane exercise the
 *failure* paths as well as the happy one: break the keys endpoint, or rotate the signing key. They
@@ -17,12 +19,16 @@ matters, it is a machine for forging credentials against whatever resource serve
 
 import time
 
+import json
+
 import jwt
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 from app.config import settings
-from app.entra import faults, keys
+from app.entra import faults, keys, oidc
 from app.entra.models import JwksFaultRequest, TenantState, TokenRequest, TokenResponse
 
 router = APIRouter(prefix="/entra", tags=["entra"])
@@ -34,20 +40,40 @@ def _issuer() -> str:
 
 
 @router.get("/{tenant}/v2.0/.well-known/openid-configuration")
-def discovery(tenant: str) -> dict[str, object]:
-    """The discovery document, so `curl`ing the base URL tells a human what is wired up.
+def discovery(tenant: str, request: Request) -> JSONResponse:
+    """The discovery document — which MSAL.js *does* read, so it has to be right.
 
-    Chemclaw3 does not read this — it derives the JWKS and issuer from its own settings — so this
-    is documentation served over HTTP rather than a contract anything depends on.
+    Chemclaw3 does not read this — it derives the JWKS and issuer from its own settings. The
+    browser sign-in does: `@azure/msal-browser` fetches it (with `fetch`, hence the CORS headers)
+    to find the authorize, token and end-session endpoints of whatever authority it was given. The
+    endpoints are derived from `MOCK_ENTRA_ISSUER` rather than from the request, so the document
+    names the address the tenant was told it lives at — which is what an `iss` has to match.
     """
     base = _issuer().removesuffix("/v2.0")
-    return {
+    document = {
         "issuer": _issuer(),
         "jwks_uri": f"{base}/discovery/v2.0/keys",
+        "authorization_endpoint": f"{base}/oauth2/v2.0/authorize",
         "token_endpoint": f"{base}/oauth2/v2.0/token",
+        "end_session_endpoint": f"{base}/oauth2/v2.0/logout",
+        "response_types_supported": ["code"],
+        "response_modes_supported": ["query", "fragment", "form_post"],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
+        "code_challenge_methods_supported": ["S256"],
+        "scopes_supported": sorted(oidc.OIDC_SCOPES),
+        "subject_types_supported": ["pairwise"],
         "id_token_signing_alg_values_supported": ["RS256"],
-        "note": f"mock tenant {tenant!r} — no authorization flow, no client authentication",
+        "token_endpoint_auth_methods_supported": ["none"],
+        "claims_supported": [
+            "sub", "iss", "aud", "exp", "iat", "nbf", "nonce", "oid", "tid", "name",
+            "preferred_username", "roles", "ver",
+        ],
+        "note": (
+            f"MOCK tenant {tenant!r}, TEST ONLY: the login page issues any identity the tester "
+            "picks; the token endpoint also accepts a JSON body that mints one directly"
+        ),
     }
+    return JSONResponse(content=document, headers=oidc.cors_headers(request))
 
 
 @router.get("/{tenant}/discovery/v2.0/keys")
@@ -73,7 +99,33 @@ def published_keys(tenant: str) -> Response:
     return JSONResponse(content=keys.jwks())
 
 
+@router.options("/{tenant}/oauth2/v2.0/token", include_in_schema=False)
+def token_preflight(tenant: str, request: Request) -> Response:
+    """The CORS preflight MSAL's token `fetch` triggers. See `oidc.preflight`."""
+    return oidc.preflight(request)
+
+
 @router.post("/{tenant}/oauth2/v2.0/token", response_model=TokenResponse)
+async def token(tenant: str, request: Request) -> Response | TokenResponse:
+    """One URL, two callers, told apart by the body — as a real token endpoint is told by grant.
+
+    A form-encoded body is OAuth: the browser sign-in redeeming a code or a refresh token
+    (`app/entra/oidc.py`). A JSON body is the test mint below, unchanged — the shape every lane
+    driver already posts, so adding the browser flow moved none of them.
+    """
+    content_type = request.headers.get("content-type", "")
+    if content_type.startswith("application/x-www-form-urlencoded"):
+        return await oidc.token_grant(tenant, request)
+    try:
+        body = TokenRequest.model_validate(json.loads(await request.body() or b"null"))
+    except (ValueError, ValidationError) as exc:
+        errors = exc.errors() if isinstance(exc, ValidationError) else [
+            {"type": "json_invalid", "loc": ("body",), "msg": str(exc), "input": None}
+        ]
+        raise RequestValidationError(errors) from exc
+    return mint(tenant, body)
+
+
 def mint(tenant: str, request: TokenRequest) -> TokenResponse:
     """Mint an access token for the identity asked for — valid, or invalid in one stated way.
 

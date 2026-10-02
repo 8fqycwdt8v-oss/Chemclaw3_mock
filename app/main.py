@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from app.config import settings
 from app.eln.router import router as eln_router
 from app.eln.seed import seed_all
+from app.entra.oidc import router as entra_oidc_router
 from app.entra.router import router as entra_router
 
 
@@ -41,3 +42,5 @@ app.include_router(eln_router)
 # Mounted always, refused unless MOCK_ENTRA_ENABLED — so a misconfigured lane gets a 404 naming the
 # switch rather than a route that silently is not there. See app/entra/ for why it is off by default.
 app.include_router(entra_router)
+# The browser sign-in (authorize, login page, logout), behind the same switch. TEST ONLY.
+app.include_router(entra_oidc_router)

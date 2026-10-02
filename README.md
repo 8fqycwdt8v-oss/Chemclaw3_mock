@@ -19,7 +19,7 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 | ELN — free text | A JSON-exporting ELN, USPTO-style patent procedures (`eln-json` source) | `app/eln/fixtures_data.py` (`uspto_style_records`) |
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
-| Entra ID | A tenant: publishes signing keys, mints tokens Chemclaw3 accepts (**opt-in**) | `app/entra/` |
+| Entra ID | A tenant: publishes signing keys, mints tokens Chemclaw3 accepts, and signs a browser in through MSAL.js (auth code + PKCE) — **opt-in, test only** | `app/entra/` |
 
 ## Install & run
 
@@ -235,6 +235,70 @@ The asymmetry is worth stating: the **rotation** control has always worked live 
 reason the faults do not. It changes the `kid`, and an unknown `kid` is precisely what bypasses the
 cache.
 
+### Browser sign-in: authorization code + PKCE, for MSAL.js (**TEST ONLY**)
+
+The mint is for a driver that holds the token itself. A *browser* signs in differently: Chemclaw3_ui
+in `AUTH_MODE=msal` sends the chemist to an authority, gets a code back on `/auth/callback`, redeems
+it with a PKCE verifier, refreshes silently and signs out through the authority. `app/entra/oidc.py`
+is that authority, for exactly the subset of the protocol `@azure/msal-browser` uses, so the whole
+system can be driven in a browser by two (or more) distinct people. Same switch as the mint —
+`MOCK_ENTRA_ENABLED` — and the same warning: **the login page issues whoever the tester picks.**
+
+| Route | What it does |
+| --- | --- |
+| `GET /entra/{tenant}/v2.0/.well-known/openid-configuration` | Discovery, now with the authorize, token and end-session endpoints. CORS for registered origins (MSAL `fetch`es it) |
+| `GET /entra/{tenant}/oauth2/v2.0/authorize` | Validates the request, then shows a login page: preset users (`alice`, `bob`, `carol`) as buttons (`data-testid="mock-login-<name>"`) plus a free-form oid/upn/name/roles row (`mock-login-custom`). `prompt=none` answers from the session cookie or with `login_required`; a live session without `prompt=login` signs in silently |
+| `POST /entra/{tenant}/oauth2/v2.0/authorize` | The login page's form: issues the code and the session cookie, redirects (fragment, query or `form_post`) |
+| `POST /entra/{tenant}/oauth2/v2.0/token` (form body) | `grant_type=authorization_code` with PKCE (S256) and `refresh_token`. A JSON body is still the mint, unchanged |
+| `OPTIONS …/token` | The CORS preflight MSAL's `fetch` triggers |
+| `GET /entra/{tenant}/oauth2/v2.0/logout` | Ends the session; redirects to `post_logout_redirect_uri` only if it is registered (or a registered origin) |
+
+What it refuses, each as Entra does — and each a misconfiguration a UI would otherwise sail through:
+an unknown `client_id` (AADSTS700016) or an unregistered `redirect_uri` (AADSTS50011) — both as an
+error **page**, never a redirect, since redirecting to an unvalidated URI is the open redirect; no
+PKCE, or anything but S256; a verifier that does not hash to the challenge (and the failed attempt
+spends the code); a code replayed (AADSTS54005), expired, or redeemed by another client or against
+another redirect URI; a token request with no `Origin` (AADSTS9002327 — a SPA's code is redeemable
+cross-origin only, so a `curl` replay of a code lifted from a URL bar does not work) or from an
+origin no redirect URI is registered at; and a scope for any API but `MOCK_ENTRA_AUDIENCE`
+(AADSTS500011), which is what a UI with the wrong `API_SCOPE` meets from Entra too.
+
+The tokens carry what each reader reads. The access token: `aud` = the API, `iss`, `tid`, `oid`,
+`preferred_username`, `name`, `roles`, `scp`, `azp`, `exp`/`nbf`/`iat` — measured against Chemclaw3's
+own `validate_token` and its real `create_app()` front door (200 for alice and bob, 401 without a
+token). The id_token: `aud` = the SPA client id, the request's `nonce` (and none when none was
+sent, since MSAL rejects an unexpected one), `roles` (the UI reads roles from the id_token). The
+response also carries `client_info`, so MSAL's default (`AAD`) protocol mode builds the same
+`homeAccountId` shape it builds against Entra. `tests/test_entra_oidc.py` walks the flow and every
+refusal.
+
+**MSAL refuses an http authority — loopback included — so serve the tenant over https.** A
+throwaway self-signed pair is enough; `start.sh` takes `MOCK_SSL_CERTFILE` / `MOCK_SSL_KEYFILE`:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj /CN=127.0.0.1 \
+  -addext subjectAltName=IP:127.0.0.1 -keyout /tmp/mock-key.pem -out /tmp/mock-cert.pem
+MOCK_ENTRA_ENABLED=true \
+MOCK_ENTRA_ISSUER=https://127.0.0.1:8443/entra/mock-tenant/v2.0 \
+MOCK_ENTRA_SPA_CLIENT_ID=chemclaw-ui-local \
+MOCK_ENTRA_REDIRECT_URIS=http://127.0.0.1:8080/auth/callback \
+MOCK_SERVER_PORT=8443 MOCK_SSL_CERTFILE=/tmp/mock-cert.pem MOCK_SSL_KEYFILE=/tmp/mock-key.pem \
+./start.sh
+```
+
+and the UI with `AUTH_MODE=msal ENTRA_AUTHORITY=https://127.0.0.1:8443/entra/mock-tenant
+ENTRA_TENANT_ID=mock-tenant ENTRA_CLIENT_ID=chemclaw-ui-local API_SCOPE=api://chemclaw/Chat.Access`
+(the browser has to accept the certificate once: open the discovery URL and proceed). Chemclaw3
+then trusts `CHEMCLAW_ENTRA_ISSUER=https://127.0.0.1:8443/entra/mock-tenant/v2.0` and the matching
+`CHEMCLAW_ENTRA_JWKS_URL` — but it fetches keys with httpx over certifi's bundle, so it will not
+trust a throwaway certificate. Run a second, plain-http instance of this process for it with the
+same `MOCK_ENTRA_PRIVATE_KEY_PEM` and the same (https) `MOCK_ENTRA_ISSUER`: the issuer is only a
+string, so both instances sign and publish identically, and Chemclaw3 reads keys from the http one.
+(The measurement above ran the tenant over http, in-process with Chemclaw3, which has no browser
+to satisfy.) Chemclaw3_ui's
+`e2e/oidc-mock.spec.ts` (`npm run test:e2e:oidc-mock`) runs all of this in Playwright, alice and
+bob in two browser contexts.
+
 ## Wiring a Chemclaw3 checkout to this backend
 
 Add to Chemclaw3's `.env` (or export directly):
@@ -382,7 +446,7 @@ pytest
 ```
 
 Covers the ELN list/append/reset endpoints, the stand-in Entra tenant's accept and reject paths,
-its injected faults (against a real socket, `tests/test_entra_faults.py`), and the vendor MCP tool. The ELN fixtures themselves were
+its browser sign-in (`tests/test_entra_oidc.py`), its injected faults (against a real socket, `tests/test_entra_faults.py`), and the vendor MCP tool. The ELN fixtures themselves were
 additionally verified against Chemclaw3's real `JsonExportAdapter`/`OrdJsonAdapter` classes
 directly (not just shape assertions here) — both parsed all seeded entries with zero mapping
 errors.
@@ -434,8 +498,12 @@ the two are complements, not alternatives.
 | `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories when the app starts |
 | `MOCK_HTE_MAX_RECORDS_PER_DATASET` | `0` (unlimited) | Cap each real HTE dataset (`app/eln/real_hte.py`) to its first N rows; real rows only truncated, never fabricated |
 | `MOCK_MCP_VENDOR_HOST` / `MOCK_MCP_VENDOR_PORT` | `0.0.0.0` / `8091` | Bind address for the vendor MCP server |
-| `MOCK_ENTRA_ENABLED` | `false` | Mint tokens from the stand-in tenant (the keys endpoint answers either way) |
+| `MOCK_ENTRA_ENABLED` | `false` | Mint tokens and serve the browser sign-in from the stand-in tenant (the keys and discovery endpoints answer either way) |
 | `MOCK_ENTRA_ISSUER` | `http://127.0.0.1:8090/entra/mock-tenant/v2.0` | The `iss` minted tokens claim; must equal `CHEMCLAW_ENTRA_ISSUER` |
 | `MOCK_ENTRA_AUDIENCE` | `api://chemclaw` | The `aud` minted tokens carry; must equal `CHEMCLAW_ENTRA_AUDIENCE` |
 | `MOCK_ENTRA_PRIVATE_KEY_PEM` | *(empty)* | A fixed signing key, for a lane whose tokens must survive a restart. Empty generates one per start |
 | `MOCK_ENTRA_FAULT_INJECTION` | `false` | Expose the `_control` routes that break the keys endpoint or rotate the signing key (see "Breaking the tenant on purpose") |
+| `MOCK_ENTRA_SPA_CLIENT_ID` | `mock-spa-client` | The one SPA client id the browser sign-in knows; the UI's `ENTRA_CLIENT_ID` must equal it |
+| `MOCK_ENTRA_REDIRECT_URIS` | loopback `:5173` and `:8080` `/auth/callback` | Registered redirect URIs, comma-separated, matched exactly. Their origins are the only ones the token endpoint answers |
+| `MOCK_ENTRA_USERS` | *(empty: alice, bob, carol)* | The login page's testers as JSON: `{"dave": {"oid": "...", "upn": "...", "name": "...", "roles": ["..."]}}` |
+| `MOCK_SSL_CERTFILE` / `MOCK_SSL_KEYFILE` | *(empty)* | `start.sh` only: serve over TLS, which MSAL requires of an authority |
