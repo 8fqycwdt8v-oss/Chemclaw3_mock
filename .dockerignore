@@ -1,0 +1,20 @@
+# Keep the build context to what `Containerfile` copies: no venv, no git, no seeded data, no
+# worktrees, no egg-info from an editable install. A local `.venv` in the context would otherwise be
+# copied nowhere but still uploaded, and `data/` holds whatever the last local run seeded.
+.git
+.github
+.claude
+.venv
+.venv-audit
+data
+tests
+*.egg-info
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.smoke
+.smoke-*.log
+.audit-requirements.txt
+.env
+*.pem
+*.key

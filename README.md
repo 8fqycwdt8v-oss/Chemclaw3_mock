@@ -37,6 +37,28 @@ provenance of every one of them). **Point Chemclaw3's own `CHEMCLAW_ELN_EXPORT_D
 `CHEMCLAW_ORD_EXPORT_DIR` at those same paths** — Chemclaw3 reads ELN data as flat files off
 disk, not over HTTP (see "How the ELN datasources actually connect" below).
 
+### As a container (one image, two processes)
+
+`Containerfile` builds one image for both processes. The command picks which one runs, and it
+runs the same `start.sh` / `start-mcp.sh` as a checkout does. The image keeps the checkout's
+layout (`/app/app`, `/app/.venv`), so the scripts' `.venv` path resolves unchanged:
+
+```bash
+docker build -f Containerfile -t chemclaw/mock:kind .
+docker run --rm -p 8090:8090 chemclaw/mock:kind                    # backend: ELN/ORD + Entra, :8090
+docker run --rm -p 8091:8091 chemclaw/mock:kind ./start-mcp.sh     # vendor MCP server, :8091
+```
+
+The backend seeds `MOCK_ELN_EXPORT_DIR` / `MOCK_ORD_EXPORT_DIR` on start, the same as it does
+from a checkout. Both default to `/app/data/eln/exports[/ord]` in the image. To share them with
+Chemclaw3, mount one volume into both containers and set both sides' variables to paths on it.
+The image runs as UID 1001 in group 0, and anything it writes is group-0 writable, so an arbitrary
+UID (OpenShift's restricted SCC) works too. Its `HEALTHCHECK` asks whichever process is running:
+the backend's `/healthz`, or the vendor's `/mcp` transport (any HTTP status counts, because the
+vendor has no health route). The base is pinned by digest. The Python dependencies are resolved at
+build time, because this repository has no lockfile (see "The dependency audit" below). The
+resolved set is written to `/app/requirements.lock.txt` in the image.
+
 ## The stand-in Entra tenant
 
 Chemclaw3's front door validates every request's bearer token against a tenant's JWKS — RS256
@@ -402,9 +424,18 @@ is a failure.
 
 **It publishes no image and deploys nowhere, and that is the design rather than a gap.** This is a
 test double. Beside the real integrations it would give the system two answers to one question, so
-no environment above `dev` runs it and no release descriptor names it — see Chemclaw3's
+no environment above `dev` runs it and no release descriptor names it. See Chemclaw3's
 `deploy/jenkins/README.md` and `D-2026-08-26-a-release-is-a-descriptor-and-a-target`. It runs in the
 local lane, which is where a double belongs.
+
+**It does build the image.** A local kind cluster runs the double in-cluster from `Containerfile`.
+The image is built on the developer's machine and loaded with `kind load`, so the stage
+`Image builds and both processes answer` builds it and checks it the same way the start scripts
+are checked. It starts both processes as a UID the image did not create, in group 0. The backend
+has to answer `/healthz` and seed both export dirs, and the vendor's `/mcp` has to answer. The tag
+is per-run and removed afterwards. Nothing is pushed, and there is no registry parameter. Building
+an image is not a deploy: that needs a published artifact that something names, and this pipeline
+produces neither.
 
 ### The dependency audit
 
