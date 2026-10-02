@@ -18,7 +18,8 @@ import urllib.error
 import urllib.request
 
 _TLS = bool(os.environ.get("MOCK_SSL_CERTFILE"))
-_BACKEND = f"{'https' if _TLS else 'http'}://127.0.0.1:{os.environ.get('MOCK_SERVER_PORT', '8090')}/healthz"
+_SCHEME = "https" if _TLS else "http"
+_BACKEND = f"{_SCHEME}://127.0.0.1:{os.environ.get('MOCK_SERVER_PORT', '8090')}/healthz"
 _VENDOR = f"http://127.0.0.1:{os.environ.get('MOCK_MCP_VENDOR_PORT', '8091')}/mcp"
 
 
