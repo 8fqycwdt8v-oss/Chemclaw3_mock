@@ -75,6 +75,32 @@ class Settings:
         # request rather than only when a fault is armed.
         self.entra_fault_injection = _env_bool("MOCK_ENTRA_FAULT_INJECTION", False)
 
+        # The browser sign-in (app/entra/oidc.py): authorization code + PKCE for a SPA, so a
+        # browser running MSAL.js can sign in as a chosen tester. Behind MOCK_ENTRA_ENABLED like the
+        # mint, because it is the same machine for issuing any identity, with a login page on it.
+        #
+        # The one SPA client id this tenant knows — the UI's ENTRA_CLIENT_ID must equal it. A real
+        # tenant refuses an unregistered client (AADSTS700016) and so does this one, so a UI pointed
+        # at the wrong registration fails here, at sign-in, rather than somewhere later.
+        self.entra_spa_client_id = _env_str("MOCK_ENTRA_SPA_CLIENT_ID", "mock-spa-client")
+        # The registered redirect URIs, comma-separated and matched exactly — the app registration's
+        # "Single-page application" platform. Their origins are also the only origins the token
+        # endpoint answers cross-origin requests from. Loopback UI ports by default (the Vite dev
+        # server, the BFF's own default port), so nothing off this machine is ever a redirect target
+        # unless a run names it.
+        self.entra_redirect_uris = [
+            uri.strip()
+            for uri in _env_str(
+                "MOCK_ENTRA_REDIRECT_URIS",
+                "http://localhost:5173/auth/callback,http://127.0.0.1:5173/auth/callback,"
+                "http://localhost:8080/auth/callback,http://127.0.0.1:8080/auth/callback",
+            ).split(",")
+            if uri.strip()
+        ]
+        # The testers the login page offers, as JSON: {"alice": {"oid": ..., "upn": ..., "name":
+        # ..., "roles": [...]}, ...}. Empty uses the three presets in app/entra/oidc.py.
+        self.entra_users_json = _env_str("MOCK_ENTRA_USERS", "")
+
         # MCP vendor tool server (run standalone, see app/mcp_tools/vendor_server.py).
         self.mcp_vendor_host = _env_str("MOCK_MCP_VENDOR_HOST", "0.0.0.0")
         self.mcp_vendor_port = _env_int("MOCK_MCP_VENDOR_PORT", 8091)
