@@ -16,7 +16,10 @@ dependencies = [
     # RS256 signing for the stand-in Entra tenant (app/entra/). `[crypto]` is what pulls in
     # `cryptography`, without which PyJWT can encode HS256 and nothing else — and HS256 is exactly
     # the algorithm a resource server pinned to RS256 must never accept.
-    "pyjwt[crypto]>=2.9",
+    # `>=2.14`: the release that gave `PyJWKClient` its refresh cooldown (`cooldown_duration`).
+    # `tests/test_entra_faults.py` builds the client as Chemclaw3 does, with it set to 0, and pins
+    # the stock 30 s that README.md's "rotate, then mint" recipe has to plan around.
+    "pyjwt[crypto]>=2.14",
 ]
 
 [project.optional-dependencies]

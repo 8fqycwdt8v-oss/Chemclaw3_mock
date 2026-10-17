@@ -335,6 +335,132 @@ def test_logout_does_not_redirect_to_an_unregistered_uri(tenant):
     assert "location" not in out.headers
 
 
+# --- a server-side public client: Chemclaw3_ui's token handler ---------------------------------
+#
+# Chemclaw3_ui in `AUTH_MODE=bff ENTRA_CLIENT_AUTH=none` is a different client of this tenant from
+# MSAL.js: a public client that runs on a server. It holds no secret, redeems the code itself, sends
+# its own `APP_ORIGIN` as `Origin` (the single-page rule refuses a redemption without one), and
+# validates the ID token with `jose`. Its wire is copied here from its `server/auth/oidc.ts` rather
+# than shared with the MSAL helpers above, because the two differ where this tenant checks:
+# `response_mode=query`, no `client_info`, a bare form content type, and an end-session request
+# naming `client_id` and the app's root.
+
+#: The token handler's `APP_ORIGIN`. Its redirect URI is `APP_ORIGIN/auth/callback`, so it is the
+#: registered origin.
+APP_ORIGIN = SPA_ORIGIN
+
+
+def _bff_sign_in(client, user: str, nonce: str) -> dict:
+    """Sign `user` in as the token handler does, and return the token endpoint's JSON answer."""
+    verifier, challenge = _pkce()
+    authorize = {
+        "client_id": CLIENT_ID,
+        "response_type": "code",
+        "redirect_uri": REDIRECT_URI,
+        "response_mode": "query",
+        "scope": SCOPE,
+        "state": "bff-state",
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    page = client.get(f"{BASE}/authorize", params=authorize)
+    request_id = re.search(r'name=request_id value="([^"]+)"', page.text).group(1)
+    chosen = client.post(
+        f"{BASE}/authorize",
+        content=urlencode({"request_id": request_id, "user": user}),
+        headers={"content-type": "application/x-www-form-urlencoded"},
+    )
+    delivered = _fragment(chosen)
+    assert delivered["state"] == "bff-state"
+    token_endpoint = client.get(f"/entra/{TENANT}/v2.0/.well-known/openid-configuration").json()[
+        "token_endpoint"
+    ]
+    exchanged = client.post(
+        token_endpoint,
+        content=urlencode(
+            {
+                "client_id": CLIENT_ID,
+                "grant_type": "authorization_code",
+                "code": delivered["code"],
+                "redirect_uri": REDIRECT_URI,
+                "code_verifier": verifier,
+                "scope": SCOPE,
+            }
+        ),
+        headers={
+            "content-type": "application/x-www-form-urlencoded",
+            "accept": "application/json",
+            "origin": APP_ORIGIN,
+        },
+    )
+    assert exchanged.status_code == 200, exchanged.text
+    return exchanged.json()
+
+
+def test_a_server_side_public_client_redeems_a_code_with_the_apps_origin(tenant):
+    """No secret and no browser: the code, the verifier and the app's `Origin` are the whole proof.
+
+    The token set is read as the token handler reads it: an access token Chemclaw3 accepts, a
+    positive `expires_in`, a refresh token, and an ID token.
+    """
+    body = _bff_sign_in(tenant, "bob", nonce="bff-nonce")
+    assert _verify_access(tenant, body["access_token"])["preferred_username"] == (
+        "bob@mock-tenant.test"
+    )
+    assert body["expires_in"] > 0
+    assert body["refresh_token"]
+    assert body["id_token"]
+
+
+def test_the_id_token_a_server_side_client_gets_carries_nonce_exp_and_sub(tenant):
+    """The ID token passes the checks the token handler makes before it starts a session.
+
+    Signature against the key set discovery names, `iss` equal to discovery's issuer, `aud` the
+    client id, `exp` and `sub` both present (`jose`'s `requiredClaims`), and the sign-in's own
+    `nonce`. Missing any one, the sign-in fails with `invalid_id_token`.
+    """
+    body = _bff_sign_in(tenant, "alice", nonce="bff-nonce-alice")
+    discovery = tenant.get(f"/entra/{TENANT}/v2.0/.well-known/openid-configuration").json()
+    keys = tenant.get(discovery["jwks_uri"]).json()["keys"]
+    kid = jwt.get_unverified_header(body["id_token"])["kid"]
+    identity = jwt.decode(
+        body["id_token"],
+        PyJWK.from_dict(next(k for k in keys if k["kid"] == kid)).key,
+        algorithms=["RS256"],
+        audience=CLIENT_ID,
+        issuer=discovery["issuer"],
+        leeway=60,
+        options={"require": ["exp", "sub"]},
+    )
+    assert identity["nonce"] == "bff-nonce-alice"
+    assert isinstance(identity["sub"], str) and identity["sub"]
+    assert identity["oid"] == "00000000-0000-0000-0000-00000000a11c"
+    assert identity["preferred_username"] == "alice@mock-tenant.test"
+    assert identity["roles"] == ["chemist", "reviewer"]
+
+
+def test_the_end_session_endpoint_signs_out_and_returns_to_the_apps_root(tenant):
+    """The URL the token handler sends a signing-out browser to: discovery's end-session endpoint
+    with `client_id` and `post_logout_redirect_uri` set to the app's root, with its slash.
+
+    The tenant's session ends, so the next silent sign-in is `login_required`, and the browser is
+    sent back to that root unchanged.
+    """
+    _bff_sign_in(tenant, "alice", nonce="bff-nonce")
+    discovery = tenant.get(f"/entra/{TENANT}/v2.0/.well-known/openid-configuration").json()
+    out = tenant.get(
+        discovery["end_session_endpoint"],
+        params={"client_id": CLIENT_ID, "post_logout_redirect_uri": f"{APP_ORIGIN}/"},
+    )
+    assert out.status_code == 302
+    assert out.headers["location"] == f"{APP_ORIGIN}/"
+
+    _, challenge = _pkce()
+    after = tenant.get(f"{BASE}/authorize", params=_authorize_params(challenge, prompt="none"))
+    assert _fragment(after)["error"] == "login_required"
+
+
 # --- PKCE --------------------------------------------------------------------------------------
 
 
