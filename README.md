@@ -150,8 +150,9 @@ nobody would ever be told about.
 
 **The JWK's `alg`, which is not the defect it looks like.** Real Entra's JWKS entries carry no
 `alg` (they carry `x5t`/`x5c`/`issuer`); `app/entra/keys.py` publishes `"alg": "RS256"`. Measured
-under PyJWT 2.13, which is what Chemclaw3 validates with: `PyJWK` infers RS256 from `kty` and both
-documents parse identically, so this is cosmetic and is left alone rather than churned.
+under PyJWT 2.15.1, which is what Chemclaw3's lockfile resolves (first under 2.13): `PyJWK` infers
+RS256 from `kty` and both documents parse identically, so this is cosmetic and is left alone rather
+than churned.
 
 **The v1-vs-v2 issuer mismatch is drivable today, and deliberately not a feature.**
 `sts.windows.net/{tid}` against `login.microsoftonline.com/{tid}/v2.0` is the commonest real-tenant
@@ -220,10 +221,11 @@ in-process ASGI tests never reach.
 ### An armed fault is invisible to a *warm* front door
 
 This is the part a live lane has to plan around, and it is a property of the reading side rather
-than a defect here. Chemclaw3's `api/auth.py::_client_for` keeps one `PyJWKClient` per endpoint for
-the process lifetime and passes only `timeout=`, so PyJWT's defaults — `cache_jwk_set=True,
-lifespan=300` — apply, and `get_signing_keys()` answers from the cached document without touching
-a socket. Once **one** token has validated, this tenant is not consulted again for five minutes.
+than a defect here. Chemclaw3's `api/auth.py::_client_for` keeps one `PyJWKClient` subclass per
+endpoint for the process lifetime and passes only `timeout=` and `cooldown_duration=0`, so PyJWT's
+cache defaults — `cache_jwk_set=True, lifespan=300` — apply, and `get_signing_keys()` answers from
+the cached document without touching a socket. Once **one** token has validated, this tenant is not
+consulted again for five minutes.
 
 Measured against Chemclaw3's production `create_app()` with `entra_required=True` pointed at this
 mock, nothing patched but the model: cold `POST /sessions` → 200, which warms the key set; then
@@ -248,10 +250,21 @@ curl -sX POST localhost:8090/entra/mock-tenant/oauth2/v2.0/token \
   -H 'content-type: application/json' -d '{"oid":"u-alice"}'   # signed by the new kid
 ```
 
+**Recipe 1 works on Chemclaw3 because its 60 s is the only cooldown.** Since PyJWT 2.14,
+`PyJWKClient` has a refresh cooldown of its own, `cooldown_duration`, 30 s by default, and every
+successful fetch starts it, the warm one included. Inside that window an unknown `kid` is not
+refetched: the lookup fails as a key that does not exist, so the fault never reaches the client and
+the front door answers as for a bad credential (a 401), not for an outage. Chemclaw3 turns that
+cooldown off (`cooldown_duration=0`). Against a resource server that keeps PyJWT's default, mint
+under the new `kid` at least 30 s after that server last fetched the key set, and expect at most
+one forced refresh per 30 s.
+
 `test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced` pins both halves —
 that a warm client is blind while the tenant really is 503ing, and that a rotation plus a mint
-makes the fault reach it — and it asserts PyJWT's 300 s default, so a dependency bump that moves
-the window turns this section red rather than leaving it quietly wrong.
+makes the fault reach a client built as Chemclaw3 builds its own — and it asserts PyJWT's 300 s
+default, so a dependency bump that moves the window turns this section red rather than leaving it
+quietly wrong. `test_a_stock_client_inside_its_own_cooldown_reads_rotate_then_mint_as_a_missing_key`
+does the same for the 30 s and the stock client.
 
 The asymmetry is worth stating: the **rotation** control has always worked live for the same
 reason the faults do not. It changes the `kid`, and an unknown `kid` is precisely what bypasses the
@@ -293,6 +306,14 @@ sent, since MSAL rejects an unexpected one), `roles` (the UI reads roles from th
 response also carries `client_info`, so MSAL's default (`AAD`) protocol mode builds the same
 `homeAccountId` shape it builds against Entra. `tests/test_entra_oidc.py` walks the flow and every
 refusal.
+
+The same routes have a second client: Chemclaw3_ui's server-side token handler
+(`AUTH_MODE=bff ENTRA_CLIENT_AUTH=none`). It is a public client with no secret. It redeems the code
+from its server and sends its own `APP_ORIGIN` as `Origin`, which the single-page rule above
+requires. It refuses an ID token without `exp`, `sub` or the sign-in's `nonce`. At sign-out it
+sends the browser to the end-session endpoint with `client_id` and `post_logout_redirect_uri` set to
+`APP_ORIGIN/`. `tests/test_entra_oidc.py` pins that wire too, copied from its
+`server/auth/oidc.ts`.
 
 **MSAL refuses an http authority — loopback included — so serve the tenant over https.** A
 throwaway self-signed pair is enough; `start.sh` takes `MOCK_SSL_CERTFILE` / `MOCK_SSL_KEYFILE`:

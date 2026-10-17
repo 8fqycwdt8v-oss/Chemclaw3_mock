@@ -173,11 +173,11 @@ def test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced
     Every other test here builds `PyJWKClient(..., cache_keys=False)` per assertion, which is a
     cold client and proves only that the *first* fetch after arming fails. Chemclaw3's
     `api/auth.py::_client_for` does the opposite: one client per endpoint for the process lifetime,
-    built with `timeout=` alone, so PyJWT's `cache_jwk_set=True, lifespan=300` defaults apply and
-    `get_signing_keys()` answers from the cached document without touching the socket. Measured
-    against Chemclaw3's production `create_app()` with `entra_required=True`: once one token has
-    validated, arming any of the three faults leaves `/sessions` answering 200, not the 503 the
-    README used to promise — for the whole lifespan.
+    built with only `timeout=` and `cooldown_duration=0`, so PyJWT's `cache_jwk_set=True,
+    lifespan=300` defaults apply and `get_signing_keys()` answers from the cached document without
+    touching the socket. Measured against Chemclaw3's production `create_app()` with
+    `entra_required=True`: once one token has validated, arming any of the three faults leaves
+    `/sessions` answering 200, not the 503 the README used to promise — for the whole lifespan.
 
     So this pins both halves: that a warm client is blind while the tenant really is down, and the
     route out of it that does not need a 300-second wait. An unknown `kid` is what forces
@@ -185,8 +185,13 @@ def test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced
     mint — which is why the rotation control is the fault surface's companion rather than a
     separate toy. (Chemclaw3 rate-limits that forced refresh with
     `entra_jwks_refresh_cooldown_seconds`, so a driver gets one of these per cooldown.)
+
+    The client is built the way Chemclaw3 builds its own, `cooldown_duration=0` included. Since
+    PyJWT 2.14 a stock client has a refresh cooldown of its own that the warm fetch starts, and
+    inside it the unknown `kid` is never refetched; Chemclaw3 turns it off so that its cooldown is
+    the only one. The stock client is the next test.
     """
-    client = PyJWKClient(_keys_url(tenant), timeout=5)
+    client = PyJWKClient(_keys_url(tenant), timeout=5, cooldown_duration=0)
     assert client.jwk_set_cache is not None, "PyJWT stopped caching the key set by default"
     assert client.jwk_set_cache.lifespan == 300, (
         "PyJWT's default JWKS lifespan moved; README.md quotes 300 seconds as the blind window"
@@ -202,3 +207,28 @@ def test_an_armed_fault_is_invisible_to_a_warm_key_set_until_a_refresh_is_forced
     _rotate(tenant)
     with pytest.raises(jwt.PyJWKClientConnectionError):
         client.get_signing_key_from_jwt(_mint(tenant, oid="u-alice"))
+
+
+def test_a_stock_client_inside_its_own_cooldown_reads_rotate_then_mint_as_a_missing_key(tenant):
+    """What "rotate, then mint" meets at a resource server running PyJWT's client unmodified.
+
+    PyJWT 2.14 gave `PyJWKClient` a refresh cooldown, `cooldown_duration`, 30 s by default, which
+    every successful fetch starts — the warm one included. Inside it an unknown `kid` is not
+    refetched: the lookup fails as a key that does not exist, so the armed fault never reaches the
+    client, and a front door built this way answers as for a bad credential rather than for an
+    outage. Chemclaw3 is not that front door (the test above); README.md says what a driver does
+    about one that is, and quotes the 30 s this asserts.
+    """
+    client = PyJWKClient(_keys_url(tenant), timeout=5)
+    assert client.cooldown_duration == 30, (
+        "PyJWT's default refresh cooldown moved; README.md quotes 30 seconds"
+    )
+    assert [key.key_id for key in client.get_signing_keys()] == [keys.PUBLISHED_KID]
+
+    _arm(tenant, "unavailable")
+    _rotate(tenant)
+    with pytest.raises(jwt.PyJWKClientError) as refused:
+        client.get_signing_key_from_jwt(_mint(tenant, oid="u-alice"))
+    assert type(refused.value) is jwt.PyJWKClientError, (
+        "a stock client refetched inside its cooldown — README.md's recipe for one is now wrong"
+    )
