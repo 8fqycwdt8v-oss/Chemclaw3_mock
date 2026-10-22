@@ -19,6 +19,7 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 | ELN — free text | A JSON-exporting ELN, USPTO-style patent procedures (`eln-json` source) | `app/eln/fixtures_data.py` (`uspto_style_records`) |
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
+| Source-eval answer key | The answers to Chemclaw3's structured-filter probes (`data/evals/probes/sources.yaml`), computed from the seeded ORD records and pinned by `tests/test_source_eval.py` | `app/eln/source_eval.py` |
 | Entra ID | A tenant: publishes signing keys, mints tokens Chemclaw3 accepts, and signs a browser in through MSAL.js (auth code + PKCE) — **opt-in, test only** | `app/entra/` |
 
 ## Install & run
