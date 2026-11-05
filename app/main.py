@@ -1,5 +1,6 @@
 """Chemclaw3_mock: a single lightweight FastAPI process standing in for Chemclaw3's ELN
-datasources and (opt-in) an Entra ID tenant during testing. Run with:
+datasources, a DuckDB warehouse, a slurmrestd and (opt-in) an Entra ID tenant during testing.
+Run with:
 
     uvicorn app.main:app --port 8090
 
@@ -17,12 +18,15 @@ from app.eln.router import router as eln_router
 from app.eln.seed import seed_all
 from app.entra.oidc import router as entra_oidc_router
 from app.entra.router import router as entra_router
+from app.slurm.router import router as slurm_router
+from app.warehouse import build_warehouse
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     if settings.eln_seed_on_startup:
         seed_all(reset=True)
+        build_warehouse(settings.warehouse_path)
     yield
 
 
@@ -44,3 +48,5 @@ app.include_router(eln_router)
 app.include_router(entra_router)
 # The browser sign-in (authorize, login page, logout), behind the same switch. TEST ONLY.
 app.include_router(entra_oidc_router)
+# A slurmrestd stand-in for Chemclaw3's `slurm_rest` compute driver. Runs nothing; see the module.
+app.include_router(slurm_router)

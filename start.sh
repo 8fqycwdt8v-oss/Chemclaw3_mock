@@ -8,6 +8,9 @@ cd "$SCRIPT_DIR"
 export MOCK_ELN_EXPORT_DIR="${MOCK_ELN_EXPORT_DIR:-$SCRIPT_DIR/data/eln/exports}"
 export MOCK_ORD_EXPORT_DIR="${MOCK_ORD_EXPORT_DIR:-$SCRIPT_DIR/data/eln/exports/ord}"
 export MOCK_ELN_SEED_ON_STARTUP="${MOCK_ELN_SEED_ON_STARTUP:-true}"
+# The warehouse file and the Slurm artifact directory, absolute for the same reason.
+export MOCK_WAREHOUSE_PATH="${MOCK_WAREHOUSE_PATH:-$SCRIPT_DIR/data/warehouse/reactions.duckdb}"
+export MOCK_SLURM_ARTIFACT_DIR="${MOCK_SLURM_ARTIFACT_DIR:-$SCRIPT_DIR/data/slurm}"
 
 PORT="${MOCK_SERVER_PORT:-8090}"
 
@@ -16,6 +19,8 @@ mkdir -p "$MOCK_ELN_EXPORT_DIR" "$MOCK_ORD_EXPORT_DIR"
 echo "Starting Chemclaw3 Mock backend on port $PORT"
 echo "  ELN exports : $MOCK_ELN_EXPORT_DIR"
 echo "  ORD exports : $MOCK_ORD_EXPORT_DIR"
+echo "  Warehouse   : $MOCK_WAREHOUSE_PATH"
+echo "  Slurm dir   : $MOCK_SLURM_ARTIFACT_DIR"
 
 # Optional TLS, for the stand-in tenant's browser sign-in: MSAL.js refuses an authority that is
 # not https (loopback included), so a UI signing in against this process needs it served over TLS.
