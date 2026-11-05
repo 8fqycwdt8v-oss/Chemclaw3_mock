@@ -20,6 +20,8 @@ dependencies = [
     # `tests/test_entra_faults.py` builds the client as Chemclaw3 does, with it set to 0, and pins
     # the stock 30 s that README.md's "rotate, then mint" recipe has to plan around.
     "pyjwt[crypto]>=2.14",
+    # The warehouse fixture (app/warehouse.py): one file a Chemclaw3 `query:` binding reads.
+    "duckdb>=1.1",
 ]
 
 [project.optional-dependencies]

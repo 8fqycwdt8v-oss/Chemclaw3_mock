@@ -101,6 +101,23 @@ class Settings:
         # ..., "roles": [...]}, ...}. Empty uses the three presets in app/entra/oidc.py.
         self.entra_users_json = _env_str("MOCK_ENTRA_USERS", "")
 
+        # The slurmrestd stand-in (app/slurm/router.py). A job runs nothing: it is pending, then
+        # running, for these many seconds, then ends in the outcome its submission asked for
+        # (MOCK_SLURM_OUTCOME in the job's environment) or this default.
+        self.slurm_pending_seconds = float(_env_str("MOCK_SLURM_PENDING_SECONDS", "1"))
+        self.slurm_run_seconds = float(_env_str("MOCK_SLURM_RUN_SECONDS", "2"))
+        self.slurm_default_outcome = _env_str("MOCK_SLURM_DEFAULT_OUTCOME", "COMPLETED")
+        # The X-SLURM-USER-TOKEN every request must carry, as a site's slurmrestd demands a JWT.
+        self.slurm_token = _env_str("MOCK_SLURM_TOKEN", "mock-slurm-token")
+        # Where an ended job's directory is written, the shared scratch the driver reads back.
+        self.slurm_artifact_dir = Path(_env_str("MOCK_SLURM_ARTIFACT_DIR", "./data/slurm"))
+
+        # The DuckDB warehouse fixture (app/warehouse.py), rebuilt from the seeded records on
+        # startup, for a Chemclaw3 source whose `query:` binding reads the `reactions` view.
+        self.warehouse_path = Path(
+            _env_str("MOCK_WAREHOUSE_PATH", "./data/warehouse/reactions.duckdb")
+        )
+
         # MCP vendor tool server (run standalone, see app/mcp_tools/vendor_server.py).
         self.mcp_vendor_host = _env_str("MOCK_MCP_VENDOR_HOST", "0.0.0.0")
         self.mcp_vendor_port = _env_int("MOCK_MCP_VENDOR_PORT", 8091)

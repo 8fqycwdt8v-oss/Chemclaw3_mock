@@ -1,12 +1,9 @@
 # Chemclaw3_mock
 
 A lightweight FastAPI mock/test backend for [Chemclaw3](https://github.com/8fqycwdt8v-oss/Chemclaw3):
-two ELN datasources (free-text and structured/ORD), a stand-in Entra tenant, and an
-example HTTP-transport MCP tool. Everything is deterministic, CPU-light, and runs with no real
+two ELN datasources (free-text and structured/ORD), a DuckDB warehouse of the same records, a
+`slurmrestd` stand-in, a stand-in Entra tenant, and an example HTTP-transport MCP tool. Everything is deterministic, CPU-light, and runs with no real
 compute, no database, and no network access — meant for a plain dev/text environment.
-
-(It also carried a mocked HPC/Nextflow launcher until Chemclaw3 removed that tier entirely —
-`D-2026-08-26-semiempirical-is-the-whole-tier` there. Nothing is left to stand in for.)
 
 Every wire shape here was verified against Chemclaw3's actual source
 (`eln/json_adapter.py`, `eln/ord_adapter.py`), and the two ELN fixture sets were round-tripped
@@ -20,6 +17,8 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
 | Source-eval answer key | The answers to Chemclaw3's structured-filter probes (`data/evals/probes/sources.yaml`), computed from the seeded ORD records and pinned by `tests/test_source_eval.py` | `app/eln/source_eval.py` |
+| Warehouse | A DuckDB file whose `reactions` view holds every seeded record (both ELN sources), rebuilt on startup, for a Chemclaw3 source with a `query:` binding (`MOCK_WAREHOUSE_PATH`) | `app/warehouse.py` |
+| Slurm | A `slurmrestd` v0.0.40 stand-in (submit, status, cancel, accounting) for Chemclaw3's `slurm_rest` compute driver. A job runs nothing: it is pending, then running, then ends as its submission's `MOCK_SLURM_OUTCOME` asks (`COMPLETED`, `FAILED`, `NODE_FAIL`, `TIMEOUT`, `OUT_OF_MEMORY`) and leaves its script and output in `MOCK_SLURM_ARTIFACT_DIR/<job_id>/`. Requests carry `X-SLURM-USER-NAME` and `X-SLURM-USER-TOKEN` (`MOCK_SLURM_TOKEN`) | `app/slurm/router.py` |
 | Entra ID | A tenant: publishes signing keys, mints tokens Chemclaw3 accepts, and signs a browser in through MSAL.js (auth code + PKCE) — **opt-in, test only** | `app/entra/` |
 
 ## Install & run
