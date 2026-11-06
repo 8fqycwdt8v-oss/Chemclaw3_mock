@@ -35,6 +35,10 @@ class Settings:
         self.eln_export_dir = Path(_env_str("MOCK_ELN_EXPORT_DIR", "./data/eln/exports"))
         self.ord_export_dir = Path(_env_str("MOCK_ORD_EXPORT_DIR", "./data/eln/exports/ord"))
         self.eln_seed_on_startup = _env_bool("MOCK_ELN_SEED_ON_STARTUP", True)
+        # Record-kind drops (app/records/): a LIMS export and an HTE plate export, written under
+        # this root as `lims/` and `hte/`. Meant to be the same path as Chemclaw3's
+        # CHEMCLAW_RECORD_EXPORT_DIR, which its `lims-json` and `hte-json` sources resolve under.
+        self.record_export_dir = Path(_env_str("MOCK_RECORD_EXPORT_DIR", "./data/record-exports"))
 
         # Caps each real HTE dataset (app/eln/real_hte.py) to its first N rows when set to a
         # positive number -- real data only truncated, never fabricated. 0 (default) seeds every

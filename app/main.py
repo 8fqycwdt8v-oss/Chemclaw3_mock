@@ -18,6 +18,7 @@ from app.eln.router import router as eln_router
 from app.eln.seed import seed_all
 from app.entra.oidc import router as entra_oidc_router
 from app.entra.router import router as entra_router
+from app.records.seed import seed_records
 from app.slurm.router import router as slurm_router
 from app.warehouse import build_warehouse
 
@@ -26,6 +27,7 @@ from app.warehouse import build_warehouse
 async def _lifespan(_: FastAPI):
     if settings.eln_seed_on_startup:
         seed_all(reset=True)
+        seed_records()
         build_warehouse(settings.warehouse_path)
     yield
 
