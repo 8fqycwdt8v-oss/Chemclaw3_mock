@@ -28,6 +28,7 @@ def _tenant_state_per_test():
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "eln_export_dir", tmp_path / "eln")
     monkeypatch.setattr(settings, "ord_export_dir", tmp_path / "ord")
+    monkeypatch.setattr(settings, "record_export_dir", tmp_path / "records")
     monkeypatch.setattr(settings, "hte_max_records_per_dataset", 5)
     monkeypatch.setattr(settings, "warehouse_path", tmp_path / "warehouse" / "reactions.duckdb")
     monkeypatch.setattr(settings, "slurm_artifact_dir", tmp_path / "slurm")

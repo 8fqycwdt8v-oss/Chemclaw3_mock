@@ -16,6 +16,8 @@ through Chemclaw3's real, unmodified adapter code with zero mapping errors.
 | ELN — free text | A JSON-exporting ELN, USPTO-style patent procedures (`eln-json` source) | `app/eln/fixtures_data.py` (`uspto_style_records`) |
 | ELN — structured | Native Open Reaction Database JSON exports (`eln-ord` source) | `app/eln/fixtures_data.py` (`ord_style_records`) |
 | MCP tool | A vendor building-block search/pricing tool, HTTP transport | `app/mcp_tools/vendor_server.py` |
+| LIMS export | Analytical results, one sample per file, for Chemclaw3's `lims-json` source (record kind `measurement`): three release lots and a 12-month stability study whose impurity rises at a stated rate. Curated and deterministic, not real data | `app/records/lims.py` |
+| HTE plate export | Finished plates, one per file, for Chemclaw3's `hte-json` source (record kind `plate`): the real Santanilla 2015 amidation and sulfonamidation screens at their real 1536-well positions and yields | `app/records/hte_plates.py` |
 | Source-eval answer key | The answers to Chemclaw3's structured-filter probes (`data/evals/probes/sources.yaml`), computed from the seeded ORD records and pinned by `tests/test_source_eval.py` | `app/eln/source_eval.py` |
 | Warehouse | A DuckDB file whose `reactions` view holds every seeded record (both ELN sources), rebuilt on startup, for a Chemclaw3 source with a `query:` binding (`MOCK_WAREHOUSE_PATH`) | `app/warehouse.py` |
 | Slurm | A `slurmrestd` v0.0.40 stand-in (submit, status, cancel, accounting) for Chemclaw3's `slurm_rest` compute driver. A job runs nothing: it is pending, then running, then ends as its submission's `MOCK_SLURM_OUTCOME` asks (`COMPLETED`, `FAILED`, `NODE_FAIL`, `TIMEOUT`, `OUT_OF_MEMORY`) and leaves its script and output in `MOCK_SLURM_ARTIFACT_DIR/<job_id>/`. Requests carry `X-SLURM-USER-NAME` and `X-SLURM-USER-TOKEN` (`MOCK_SLURM_TOKEN`) | `app/slurm/router.py` |
@@ -351,6 +353,9 @@ Add to Chemclaw3's `.env` (or export directly):
 CHEMCLAW_DATA_SOURCES=graph,eln-json,eln-ord
 CHEMCLAW_ELN_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports
 CHEMCLAW_ORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports/ord
+# Record-kind drops: add `lims-json` and/or `hte-json` to CHEMCLAW_DATA_SOURCES; both resolve
+# their `lims/` and `hte/` subdirectories under this root.
+CHEMCLAW_RECORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/record-exports
 
 # MCP tool over HTTP transport. Chemclaw3 reaches an MCP server through its *connector* seam
 # (D-118), so the setting is CHEMCLAW_CONNECTOR_URLS — a JSON map of connector name to URL.
@@ -368,8 +373,17 @@ absolute paths before starting `uvicorn`, e.g.:
 ```bash
 export MOCK_ELN_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports
 export MOCK_ORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/eln/exports/ord
+export MOCK_RECORD_EXPORT_DIR=/absolute/path/to/Chemclaw3_mock/data/record-exports
 uvicorn app.main:app --port 8090
 ```
+
+### The record-kind drops (`lims-json`, `hte-json`)
+
+Each file is one entry, `{"id", "timestamp", "records": [...]}` — Chemclaw3's generic record drop
+(`ingest/records/json_drop.py`) — and `records` holds rows of the source's kind. Both sets were
+mapped through Chemclaw3's own `measurement` and `plate` kinds (14 results, 192 wells) with no
+refusal. The plate drop carries the same Santanilla runs the ORD drop seeds as single reactions,
+seen from the HTE platform: a lane enabling both sources holds each run once per source.
 
 ## How the ELN datasources actually connect
 
@@ -547,7 +561,8 @@ the two are complements, not alternatives.
 |---|---|---|
 | `MOCK_ELN_EXPORT_DIR` | `./data/eln/exports` | Where free-text fixtures are seeded |
 | `MOCK_ORD_EXPORT_DIR` | `./data/eln/exports/ord` | Where ORD fixtures are seeded |
-| `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories when the app starts |
+| `MOCK_ELN_SEED_ON_STARTUP` | `true` | Seed (and clear) both directories, and the record drops, when the app starts |
+| `MOCK_RECORD_EXPORT_DIR` | `./data/record-exports` | Where the LIMS (`lims/`) and HTE plate (`hte/`) drops are seeded |
 | `MOCK_HTE_MAX_RECORDS_PER_DATASET` | `0` (unlimited) | Cap each real HTE dataset (`app/eln/real_hte.py`) to its first N rows; real rows only truncated, never fabricated |
 | `MOCK_MCP_VENDOR_HOST` / `MOCK_MCP_VENDOR_PORT` | `0.0.0.0` / `8091` | Bind address for the vendor MCP server |
 | `MOCK_ENTRA_ENABLED` | `false` | Mint tokens and serve the browser sign-in from the stand-in tenant (the keys and discovery endpoints answer either way) |
